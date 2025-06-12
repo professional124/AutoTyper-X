@@ -22,7 +22,7 @@ This is the full open sourced to XYZ's very own powerful bot; written in Python 
 - [Capsolver Key](https://dashboard.capsolver.com/passport/register?inviteCode=StGPg6LhBb5j) (Required)
 - [Proxies](https://proxyscrape.com/?ref=mde3odr) (Free 100 Proxies or buy 1000 Proxies for $25)
 
-# installation
+# Installation
 - [Download Python Version 3.11.5](https://www.python.org/downloads/release/python-3115/)
 ### Required Modules
 ```
