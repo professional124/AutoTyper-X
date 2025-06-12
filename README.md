@@ -4,7 +4,7 @@ This is the full open sourced to XYZ's very own powerful bot; written in Python 
 ### Information
 - Created by: 8zld & Elivce on discord
 - Discord: https://discord.gg/nitrotype
-- Founded in 12/25/2024 - 6/9/2025
+- Founded in 12/25/2023 - 6/9/2025
 
 ### Features
 ```ini
