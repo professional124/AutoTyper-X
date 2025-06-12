@@ -1,2 +1,27 @@
-# AutoTyper-Z
-Full Open source code to the #1 NitroType Bot 
+# AutoTyper Z
+This is the full open sourced to XYZ's very own powerful bot; written in Python and unique among other bots. You can utilize or modify this code in any way you wish, however I will not be maintaining or updating the bot if it gets patched in the future as I have retired from marketing these bots.
+
+### Information
+- Created by: 8zld & Elivce on discord
+- Discord: https://discord.gg/nitrotype
+- Founded in 12/25/2024 - 6/9/2025
+
+### Features
+```ini
+[+] Multi-Threaded Racing ; uses less resources compared to chromedrivers or google itself
+[+] Completes 2350 Races per 24 hours ; faster than any other bot and faster than auto reload
+[+] Customizable WPM and Accuracy
+[+] Proxies & Capsolver support ; prevented bans in the past
+; This Code will not have the full captcha bypass unlike the real AutoTyper Z 
+```
+
+# installation
+- [Download Python Version 3.11.5](https://www.python.org/downloads/release/python-3115/)
+### Required Modules
+```
+py-cord==2.6.1
+requests
+cloudscraper
+capsolver
+websocket-client
+fake-useragent```
