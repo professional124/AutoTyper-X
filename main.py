@@ -4,7 +4,7 @@ Complete v2 module of AutoTyper XYZ
 - Message for ssl
 We still used some of the modules from old appllo - https://github.com/sslprograms/BetterRioSourceCode
 We completely bypassed the captcha without capsolver but code will not be shown here
-Thank you for letting us buy your old code for $200; I didn't think you'd expect I knew how to code but I'll let you dominate once more if you want
+Thank you for letting us buy your code for $200; I didn't think you'd expect I knew how to code but I'll let you dominate once more if you want
 """
 
 # Required Python Modules
