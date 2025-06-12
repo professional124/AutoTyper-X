@@ -12,7 +12,11 @@ This is the full open sourced to XYZ's very own powerful bot; written in Python 
 [+] Completes 2350 Races per 24 hours ; faster than any other bot and faster than auto reload
 [+] Customizable WPM and Accuracy
 [+] Proxies & Capsolver support ; prevented bans in the past
-; This Code will not have the full captcha bypass unlike the real AutoTyper Z 
+```
+### Limitations
+```ini
+[-] Removed the completely bypass captcha ; the true version didn't require capsolver
+[-] Removed Embedded whitelist system ; will be confusing for others to use
 ```
 
 # installation
