@@ -28,4 +28,5 @@ requests
 cloudscraper
 capsolver
 websocket-client
-fake-useragent```
+fake-useragent
+```
