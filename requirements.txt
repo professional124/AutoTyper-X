@@ -1,6 +1,4 @@
-py-cord==2.6.1
-requests
-cloudscraper
-capsolver
-websocket-client
-fake-useragent
+undetected-chromedriver==3.1.5
+selenium==4.14.0
+requests==2.31.0
+python-dotenv==1.0.0
