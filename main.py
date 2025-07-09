@@ -9,7 +9,10 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import WebDriverException
 from dotenv import load_dotenv
-const port = process.env.PORT || 4000 
+import os
+
+# Get the port Render tells you to use, fallback to 8080 if running locally
+port = int(os.environ.get("PORT", 8080))
 
 # Load environment variables
 load_dotenv()
