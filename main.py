@@ -9,6 +9,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import WebDriverException
 from dotenv import load_dotenv
+const port = process.env.PORT || 4000 
 
 # Load environment variables
 load_dotenv()
