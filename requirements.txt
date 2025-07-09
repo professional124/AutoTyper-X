@@ -4,4 +4,4 @@ undetected-chromedriver==3.5.5
 requests==2.31.0
 python-dotenv==1.0.0
 colorama==0.4.6
-capsolver==1.1.2
+capsolver==1.0.7
