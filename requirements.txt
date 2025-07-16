@@ -6,3 +6,4 @@ cloudscraper
 capsolver
 websocket-client
 fake-useragent
+flask
