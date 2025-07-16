@@ -7,3 +7,4 @@ capsolver
 websocket-client
 fake-useragent
 flask
+audioop
