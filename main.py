@@ -9,7 +9,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import WebDriverException
 from dotenv import load_dotenv
-import os
 
 # Get the port Render tells you to use, fallback to 8080 if running locally
 port = int(os.environ.get("PORT", 8080))
@@ -36,7 +35,6 @@ logging.basicConfig(
 console = logging.getLogger()
 console.setLevel(logging.INFO)
 
-# Load proxies
 def load_proxies():
     if os.path.exists(PROXIES_FILE):
         with open(PROXIES_FILE) as f:
@@ -72,19 +70,23 @@ def login(driver):
         driver.find_element(By.NAME, "username").send_keys(USERNAME)
         driver.find_element(By.NAME, "password").send_keys(PASSWORD + Keys.RETURN)
         time.sleep(5)
-        if "race" in driver.current_url:
+        # Check if login succeeded by looking for the user menu or redirect
+        if "race" in driver.current_url or "garage" in driver.current_url:
             logging.info(f"Successfully logged in as {USERNAME}")
             return True
         else:
-            logging.warning("Login failed, URL did not redirect to race.")
+            logging.warning("Login failed, URL did not redirect to race or garage.")
             return False
     except Exception as e:
         logging.error(f"Login error: {e}")
         return False
 
 def solve_captcha():
-    # Placeholder for CAPTCHA solving
-    logging.warning("CAPTCHA solving required — implement capsolver logic here.")
+    # Placeholder: Implement CapSolver integration here
+    # You would use requests to send the image/base64 to CapSolver and get the result.
+    logging.warning("CAPTCHA solving required — implement CapSolver logic here.")
+    # For now, just wait and ask user to solve manually if running interactively
+    time.sleep(15)
     return True
 
 def click_random_sticker(driver):
@@ -96,26 +98,68 @@ def click_random_sticker(driver):
     except Exception:
         pass
 
+def get_race_text(driver):
+    """Fetch the actual NitroType race text from the page."""
+    try:
+        # Wait for the race text to appear
+        for _ in range(20):
+            try:
+                race_text_element = driver.find_element(By.CSS_SELECTOR, '[data-test="race-word"]')
+                if race_text_element:
+                    break
+            except Exception:
+                time.sleep(0.5)
+        # Find all word elements in the race text
+        word_elements = driver.find_elements(By.CSS_SELECTOR, '[data-test="race-word"]')
+        race_text = " ".join([el.text for el in word_elements if el.text])
+        if not race_text:
+            raise Exception("Could not fetch race text")
+        logging.info(f"Race text: {race_text}")
+        return race_text
+    except Exception as e:
+        logging.error(f"Error fetching race text: {e}")
+        return None
+
 def run_race(driver, race_number):
     try:
         driver.get("https://www.nitrotype.com/race")
         time.sleep(4)
         logging.info(f"Race #{race_number} started")
-        race_text = "This is sample race text used for testing"
+        race_text = get_race_text(driver)
+        if not race_text:
+            logging.error("No race text found, aborting this race.")
+            return False
         wpm = AVG_WPM + random.randint(-5, 5)
         acc = MIN_ACC + random.randint(-2, 2)
 
+        # Focus the typing input box
+        try:
+            input_box = driver.find_element(By.CSS_SELECTOR, 'input[type="text"], textarea')
+        except Exception:
+            input_box = driver.find_element(By.TAG_NAME, "body")
+
+        # Type the race text word by word
         for word in race_text.split():
             if random.randint(1, 100) <= acc:
                 for char in word:
-                    driver.find_element(By.TAG_NAME, "body").send_keys(char)
+                    input_box.send_keys(char)
                     time.sleep(random.uniform(60/wpm/5, 60/wpm/2))
             else:
-                driver.find_element(By.TAG_NAME, "body").send_keys("x")
-            driver.find_element(By.TAG_NAME, "body").send_keys(" ")
+                input_box.send_keys("x")
+            input_box.send_keys(" ")
 
         click_random_sticker(driver)
-        time.sleep(5)
+        # Wait for the race to finish: look for result modal or redirect
+        for _ in range(30):
+            try:
+                # Check for race result modal
+                result_modal = driver.find_elements(By.CSS_SELECTOR, '[data-test="race-results"]')
+                if result_modal:
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+
         logging.info(f"Race #{race_number} completed — WPM: {wpm}, Accuracy: {acc}%")
         return True
     except Exception as e:
