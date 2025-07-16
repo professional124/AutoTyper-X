@@ -8,3 +8,4 @@ websocket-client
 fake-useragent
 flask
 audioop
+audioop-lts; python_version >= "3.13"
