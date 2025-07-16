@@ -10,6 +10,8 @@ from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import WebDriverException
 from dotenv import load_dotenv
 
+app = Flask(__name__)  # ← This line defines 'app'
+
 # Use the port Render provides, default to 8080 locally
 port = int(os.environ.get("PORT", "8080"))
 app.run(host='0.0.0.0', port=port)
