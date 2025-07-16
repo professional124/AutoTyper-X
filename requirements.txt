@@ -1,7 +1,8 @@
-selenium==4.11.2
-webdriver-manager==3.8.6
-undetected-chromedriver==3.5.5
-requests==2.31.0
-python-dotenv==1.0.0
-colorama==0.4.6
-capsolver==1.0.7
+selenium
+python-dotenv
+py-cord
+requests
+cloudscraper
+capsolver
+websocket-client
+fake-useragent
