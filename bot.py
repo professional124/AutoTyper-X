@@ -1,11 +1,18 @@
 import os
 import discord
+from flask import Flask
 from discord.commands import Option
 from discord.ext import commands
 import threading
 from dotenv import load_dotenv
 from fake_useragent import UserAgent
 import random
+
+app = Flask(__name__)  # ← This line defines 'app'
+
+# Use the port Render provides, default to 8080 locally
+port = int(os.environ.get("PORT", "8080"))
+app.run(host='0.0.0.0', port=port)
 
 # If you use your own NitroType logic, import it here
 # from main import nitroTypeLogin, mainModule, getProxy
