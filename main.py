@@ -10,8 +10,11 @@ from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import WebDriverException
 from dotenv import load_dotenv
 
-# Get the port Render tells you to use, fallback to 8080 if running locally
-port = int(os.environ.get("PORT", 8080))
+# Get the port Render tells you to use; default to 8080 if running locally
+try:
+    port = int(os.environ.get("PORT", 8080))
+except ValueError:
+    port = 8080  # Fallback if PORT isn't a valid integer
 
 # Load environment variables
 load_dotenv()
