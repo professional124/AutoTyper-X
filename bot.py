@@ -5,45 +5,34 @@ import logging
 import time
 from datetime import datetime
 
-from flask import Flask
-from threading import Thread
+from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from fake_useragent import UserAgent
-
-import discord
-from discord.commands import Option
-
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.keys import Keys
 
-# -------------------- KEEP-ALIVE (Render Free) --------------------
-app = Flask("")
-@app.route("/")
-def home():
-    return "I'm alive!"
-
-def run_keep_alive():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-
-Thread(target=run_keep_alive, daemon=True).start()
-
-# -------------------- ENVIRONMENT & BOT SETUP --------------------
+# -----------------------------------------------------------------------------
+#  ENVIRONMENT & CONFIG
+# -----------------------------------------------------------------------------
 load_dotenv()
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-ADMIN_ID      = int(os.getenv("ADMIN_ID", "0"))
+API_TOKEN    = os.getenv("API_TOKEN")              # Your secret API key
+ADMIN_TOKEN  = os.getenv("ADMIN_TOKEN", API_TOKEN) # Use same token or separate
+PROXY_FILE   = "proxies.txt"                       # Must exist with ip:port lines
+CHROME_BIN   = "/usr/bin/chromium"
+DRIVER_BIN   = "/usr/bin/chromedriver"
 
-bot = discord.Bot()
-ua  = UserAgent(platforms="desktop")
+# -----------------------------------------------------------------------------
+#  STATE TRACKERS (IN-MEMORY)
+# -----------------------------------------------------------------------------
+tasks        = []   # [ {owner: str, tasks: [username,...]}, ... ]
+race_tracker = []   # [ {owner: str, username: str, races: int}, ... ]
 
-# -------------------- STATE TRACKERS --------------------
-tasks        = []  # [ {discord_id: int, tasks: [username,...]}, ... ]
-race_tracker = []  # [ {discord_id: int, username: str, races: int}, ... ]
-
-# -------------------- LOGGING CONFIG --------------------
+# -----------------------------------------------------------------------------
+#  LOGGING SETUP
+# -----------------------------------------------------------------------------
 os.makedirs("logs", exist_ok=True)
 logfile = f"logs/{datetime.now():%Y-%m-%d_%H-%M-%S}.log"
 logging.basicConfig(
@@ -52,336 +41,241 @@ logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s"
 )
-console = logging.getLogger()
-console.setLevel(logging.INFO)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
-# -------------------- UI CONSTANTS --------------------
-COLOR_OK    = 0x2ECC71
-COLOR_FAIL  = 0xE74C3C
-EMOJI_OK    = "✅"
-EMOJI_FAIL  = "❌"
+# -----------------------------------------------------------------------------
+#  FLASK APP
+# -----------------------------------------------------------------------------
+app = Flask(__name__)
 
-# -------------------- HELPER FUNCTIONS --------------------
-def slot_count(member) -> int:
-    """Extract slot count from roles named 'Slots: X'."""
-    for r in member.roles:
-        if r.name.startswith("Slots: "):
-            try:
-                return int(r.name.split(": ")[1])
-            except ValueError:
-                pass
-    return 0
+def require_token(fn):
+    def wrapper(*args, **kwargs):
+        token = request.args.get("token", "")
+        if token != API_TOKEN:
+            return jsonify(error="Unauthorized"), 401
+        return fn(*args, **kwargs)
+    wrapper.__name__ = fn.__name__
+    return wrapper
 
-def record_success(discord_id: int, username: str):
+@app.route("/racer", methods=["POST"])
+@require_token
+def http_racer():
+    data = request.get_json() or {}
+    owner      = data.get("owner", "default")
+    username   = data.get("username")
+    password   = data.get("password")
+    wpm        = int(data.get("wpm", 60))
+    races      = int(data.get("race_amount", data.get("races", 10)))
+    min_acc    = int(data.get("min_accuracy", data.get("min_acc", 90)))
+
+    # Basic validation
+    if not username or not password:
+        return jsonify(error="username & password required"), 400
+    if races < 1 or races > 5000:
+        return jsonify(error="race_amount must be 1–5000"), 400
+    if wpm < 30 or wpm > 170:
+        return jsonify(error="wpm must be 30–170"), 400
+    if min_acc < 0 or min_acc > 100:
+        return jsonify(error="min_accuracy must be 0–100"), 400
+
+    # Launch racing in background
+    proxy = _get_proxy()
+    threading.Thread(
+        target=_main_module,
+        args=(owner, username, password, wpm, races, min_acc, proxy),
+        daemon=True
+    ).start()
+
+    # Track active tasks
+    rec = next((t for t in tasks if t["owner"] == owner), None)
+    if not rec:
+        rec = {"owner": owner, "tasks": []}
+        tasks.append(rec)
+    rec["tasks"].append(username.lower())
+
+    return jsonify(status="started",
+                   owner=owner, username=username,
+                   wpm=wpm, race_amount=races,
+                   min_accuracy=min_acc), 200
+
+@app.route("/stopracer", methods=["POST"])
+@require_token
+def http_stopracer():
+    data = request.get_json() or {}
+    owner    = data.get("owner", "default")
+    username = data.get("username", "").lower()
+    rec = next((t for t in tasks if t["owner"] == owner), None)
+    if rec and username in rec["tasks"]:
+        rec["tasks"].remove(username)
+        return jsonify(status="stopped", owner=owner, username=username), 200
+    return jsonify(error="task not found"), 404
+
+@app.route("/stopall", methods=["POST"])
+@require_token
+def http_stopall():
+    data = request.get_json() or {}
+    owner = data.get("owner", "default")
+    rec = next((t for t in tasks if t["owner"] == owner), None)
+    if rec:
+        rec["tasks"].clear()
+    return jsonify(status="stopped_all", owner=owner), 200
+
+@app.route("/tasks", methods=["GET"])
+@require_token
+def http_tasks():
+    owner = request.args.get("owner", "default")
+    rec = next((t for t in tasks if t["owner"] == owner), None)
+    return jsonify(owner=owner, tasks=rec["tasks"] if rec else []), 200
+
+@app.route("/tracker", methods=["GET"])
+@require_token
+def http_tracker():
+    owner   = request.args.get("owner", "default")
+    username= request.args.get("username", "").lower()
+    rec = next((r for r in race_tracker
+                if r["owner"] == owner and r["username"] == username), None)
+    if rec:
+        return jsonify(owner=owner, username=username, races=rec["races"]), 200
+    return jsonify(error="no data"), 404
+
+@app.route("/stats", methods=["GET"])
+@require_token
+def http_stats():
+    # same token for admin
+    summary = []
+    total   = 0
+    for r in race_tracker:
+        summary.append({
+            "owner":    r["owner"],
+            "username": r["username"],
+            "races":    r["races"]
+        })
+        total += r["races"]
+    return jsonify(total_races=total, results=summary), 200
+
+@app.route("/admintasks", methods=["GET"])
+@require_token
+def http_admintasks():
+    target = request.args.get("target_owner", "")
+    rec = next((t for t in tasks if t["owner"] == target), None)
+    if rec:
+        return jsonify(owner=target, tasks=rec["tasks"]), 200
+    return jsonify(error="no tasks"), 404
+
+@app.route("/adminstopall", methods=["POST"])
+@require_token
+def http_adminstopall():
+    data = request.get_json() or {}
+    target = data.get("target_owner", "")
+    rec = next((t for t in tasks if t["owner"] == target), None)
+    if rec:
+        rec["tasks"].clear()
+        return jsonify(status="cleared", owner=target), 200
+    return jsonify(error="no tasks"), 404
+
+# -----------------------------------------------------------------------------
+#  SELENIUM & NITROTYPE LOGIC
+# -----------------------------------------------------------------------------
+def _get_proxy() -> str:
+    """Pick a random proxy or return None."""
+    try:
+        with open(PROXY_FILE) as f:
+            lines = [l.strip() for l in f if l.strip()]
+        return random.choice(lines) if lines else None
+    except:
+        return None
+
+def _record_success(owner: str, username: str):
+    """Increment completed race count."""
     uname = username.lower()
     rec = next((r for r in race_tracker
-                if r["discord_id"] == discord_id and r["username"] == uname), None)
+                if r["owner"] == owner and r["username"] == uname), None)
     if rec:
         rec["races"] += 1
     else:
-        race_tracker.append({"discord_id": discord_id, "username": uname, "races": 1})
+        race_tracker.append({"owner": owner, "username": uname, "races": 1})
 
-def send_dm(discord_id: int, message: str):
-    """Send a direct message to the user."""
-    async def _dm():
-        user = await bot.fetch_user(discord_id)
-        if user:
-            try:
-                await user.send(message)
-            except Exception as e:
-                logging.error(f"Failed to DM {discord_id}: {e}")
-    bot.loop.create_task(_dm())
-
-# -------------------- PROXY MANAGEMENT --------------------
-def get_proxy() -> str:
-    """Read and return a random proxy from proxies.txt."""
-    with open("proxies.txt", "r") as f:
-        lines = [l.strip() for l in f if l.strip()]
-    if not lines:
-        raise RuntimeError("proxies.txt is empty")
-    return random.choice(lines)
-
-# -------------------- SELENIUM / NITROTYPE LOGIC --------------------
-def setup_driver(proxy: str = None):
-    """Initialize headless Chrome WebDriver with optional proxy."""
-    chrome_bin = "/usr/bin/chromium"
-    driver_bin = "/usr/bin/chromedriver"
+def _setup_driver(proxy: str = None):
     opts = Options()
-    opts.headless = True
-    opts.binary_location = chrome_bin
+    opts.headless         = True
+    opts.binary_location  = CHROME_BIN
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
     if proxy:
         opts.add_argument(f"--proxy-server=http://{proxy}")
-    service = Service(driver_bin)
-    driver  = webdriver.Chrome(service=service, options=opts)
-    driver.set_window_size(1200, 800)
-    return driver
+    svc = Service(DRIVER_BIN)
+    d   = webdriver.Chrome(service=svc, options=opts)
+    d.set_window_size(1200, 800)
+    return d
 
-def login(driver, username: str, password: str) -> bool:
-    """Perform NitroType login, return True on success."""
+def _login(driver, username: str, password: str) -> bool:
     driver.get("https://www.nitrotype.com/login")
     time.sleep(2)
-    try:
-        driver.find_element(By.NAME, "username").send_keys(username)
-        driver.find_element(By.NAME, "password").send_keys(password)
-        driver.find_element(By.CSS_SELECTOR, 'button[data-cy="login-button"]').click()
-        time.sleep(4)
-        url = driver.current_url
-        success = "race" in url or "garage" in url
-        logging.info(f"[{username}] Login {'OK' if success else 'FAIL'} → {url}")
-        return success
-    except Exception as e:
-        logging.error(f"[{username}] Login error: {e}")
-        return False
+    driver.find_element(By.NAME, "username").send_keys(username)
+    driver.find_element(By.NAME, "password").send_keys(password)
+    driver.find_element(By.CSS_SELECTOR, 'button[data-cy="login-button"]').click()
+    time.sleep(4)
+    ok = "race" in driver.current_url or "garage" in driver.current_url
+    logger.info(f"[{username}] login {'OK' if ok else 'FAIL'}")
+    return ok
 
-def get_race_text(driver) -> str:
-    """Fetch the full race text as a string."""
+def _get_race_text(driver) -> str:
     for _ in range(20):
         try:
-            el = driver.find_element(By.CSS_SELECTOR, '[data-test="race-word"]')
+            el = driver.find_element(By.CSS_SELECTOR, "[data-test='race-word']")
             if el.text:
                 break
         except:
             time.sleep(0.3)
-    words = driver.find_elements(By.CSS_SELECTOR, '[data-test="race-word"]')
-    text  = " ".join(w.text for w in words if w.text)
-    logging.info(f"Fetched race text: {len(words)} words")
-    return text
+    words = driver.find_elements(By.CSS_SELECTOR, "[data-test='race-word']")
+    return " ".join(w.text for w in words if w.text)
 
-def run_race(driver, number: int, wpm: int, acc: int) -> bool:
-    """Navigate to race page and simulate typing."""
-    try:
-        driver.get("https://www.nitrotype.com/race")
-        time.sleep(3)
-        logging.info(f"Starting race #{number}")
-        text = get_race_text(driver)
-        if not text:
-            logging.warning(f"[Race {number}] No text found")
-            return False
-
-        # NitroType uses a contenteditable div for input
-        try:
-            box = driver.find_element(By.CSS_SELECTOR, '[contenteditable="true"]')
-        except:
-            box = driver.find_element(By.TAG_NAME, "body")
-
-        for word in text.split():
-            if random.randint(1, 100) <= acc:
-                for ch in word:
-                    box.send_keys(ch)
-                    time.sleep(random.uniform(60/wpm/5, 60/wpm/2))
-            else:
-                box.send_keys("x")
-            box.send_keys(" ")
-
-        logging.info(f"Completed race #{number} @ {wpm} WPM, {acc}% ACC")
-        return True
-    except Exception as e:
-        logging.error(f"[Race {number}] Error: {e}")
+def _run_race(driver, idx: int, wpm: int, acc: int) -> bool:
+    driver.get("https://www.nitrotype.com/race")
+    time.sleep(3)
+    text = _get_race_text(driver)
+    if not text:
+        logger.warning(f"Race #{idx}: no text")
         return False
-
-def main_module(discord_id, username, password, wpm, race_amount, min_acc, proxy):
-    """Thread target: runs the full racing session."""
-    driver = None
     try:
-        logging.info(f"[{username}] Session start (proxy={proxy})")
-        driver = setup_driver(proxy)
-        if not login(driver, username, password):
+        box = driver.find_element(By.CSS_SELECTOR, "[contenteditable='true']")
+    except:
+        box = driver.find_element(By.TAG_NAME, "body")
+
+    for w in text.split():
+        if random.randint(1,100) <= acc:
+            for ch in w:
+                box.send_keys(ch)
+                time.sleep(random.uniform(60/wpm/5, 60/wpm/2))
+        else:
+            box.send_keys("x")
+        box.send_keys(" ")
+    logger.info(f"Race #{idx} done")
+    return True
+
+def _main_module(owner, username, password, wpm, races, acc, proxy):
+    d = None
+    try:
+        d = _setup_driver(proxy)
+        if not _login(d, username, password):
             raise RuntimeError("Login failed")
-
-        for i in range(1, race_amount + 1):
-            success = run_race(driver, i, wpm, min_acc)
-            if success:
-                record_success(discord_id, username)
-            else:
-                logging.warning(f"[{username}] Race #{i} failed")
-            time.sleep(random.randint(3, 8))
-
-        logging.info(f"[{username}] Completed {race_amount} races")
+        for i in range(1, races+1):
+            ok = _run_race(d, i, wpm, acc)
+            if ok:
+                _record_success(owner, username)
+            time.sleep(random.randint(3,8))
+        logger.info(f"[{username}] session complete ({races} races)")
     except Exception as e:
-        logging.exception(f"[{username}] main_module crashed")
-        send_dm(discord_id, f"🚨 AutoTyper crashed on `{username}`:\n```{e}```")
+        logger.exception(f"[{username}] ERROR")
     finally:
-        if driver:
-            driver.quit()
+        if d:
+            d.quit()
 
-# -------------------- DISCORD BOT EVENTS & COMMANDS --------------------
-@bot.event
-async def on_ready():
-    await bot.change_presence(activity=discord.Game("NitroType Botting"))
-    print("[INFO] Bot is online and ready!")
-
-@bot.slash_command(name="racer", description="Start racing on NitroType")
-async def racer(
-    ctx,
-    username:   Option(str, "NitroType username"),
-    password:   Option(str, "NitroType password"),
-    wpm:        Option(int, "WPM (30–170)", min_value=30, max_value=170),
-    race_amount:Option(int, "Number of races (1–5000)", min_value=1, max_value=5000),
-    min_acc:    Option(int, "Min accuracy % (85–100)", min_value=85, max_value=100)
-):
-    # Permission & slot check
-    allowed = any(r.name == "Buyer" for r in ctx.author.roles)
-    slots  = slot_count(ctx.author)
-    if not allowed or slots < 1:
-        return await ctx.respond(
-            embed=discord.Embed(color=COLOR_FAIL, description=f"{EMOJI_FAIL} Unauthorized or no slots."),
-            ephemeral=True
-        )
-
-    ut = next((t for t in tasks if t["discord_id"] == ctx.author.id), None)
-    if ut:
-        if username.lower() in ut["tasks"]:
-            return await ctx.respond(
-                embed=discord.Embed(color=COLOR_FAIL, description=f"{EMOJI_FAIL} Already racing `{username}`."),
-                ephemeral=True
-            )
-        if len(ut["tasks"]) >= slots:
-            return await ctx.respond(
-                embed=discord.Embed(color=COLOR_FAIL, description=f"{EMOJI_FAIL} Slot limit reached."),
-                ephemeral=True
-            )
-
-    # Acquire proxy
-    try:
-        proxy = get_proxy()
-    except Exception as e:
-        return await ctx.respond(
-            embed=discord.Embed(color=COLOR_FAIL, description=f"{EMOJI_FAIL} Proxy error: {e}"),
-            ephemeral=True
-        )
-
-    await ctx.respond(embed=discord.Embed(
-        color=COLOR_OK,
-        description="💭 Launching racing session..."
-    ), ephemeral=True)
-
-    # Start racing in background
-    threading.Thread(
-        target=main_module,
-        args=(ctx.author.id, username, password, wpm, race_amount, min_acc, proxy),
-        daemon=True
-    ).start()
-
-    # Track active account
-    if ut:
-        ut["tasks"].append(username.lower())
-    else:
-        tasks.append({"discord_id": ctx.author.id, "tasks": [username.lower()]})
-
-    await ctx.followup.send(embed=discord.Embed(
-        color=COLOR_OK,
-        description=f"{EMOJI_OK} Started racing `{username}`!"
-    ), ephemeral=True)
-
-@bot.slash_command(name="stopracer", description="Stop racing a NitroType account")
-async def stopracer(ctx, username: Option(str, "NitroType username")):
-    ut = next((t for t in tasks if t["discord_id"] == ctx.author.id), None)
-    if ut and username.lower() in ut["tasks"]:
-        ut["tasks"].remove(username.lower())
-        return await ctx.respond(embed=discord.Embed(
-            color=COLOR_OK, description=f"{EMOJI_OK} Stopped `{username}`."
-        ), ephemeral=True)
-    await ctx.respond(embed=discord.Embed(
-        color=COLOR_FAIL, description=f"{EMOJI_FAIL} `{username}` not active."
-    ), ephemeral=True)
-
-@bot.slash_command(name="stopall", description="Stop all racing sessions")
-async def stopall(ctx):
-    ut = next((t for t in tasks if t["discord_id"] == ctx.author.id), None)
-    if ut:
-        ut["tasks"].clear()
-        return await ctx.respond(embed=discord.Embed(
-            color=COLOR_OK, description=f"{EMOJI_OK} All races stopped."
-        ), ephemeral=True)
-    await ctx.respond(embed=discord.Embed(
-        color=COLOR_FAIL, description=f"{EMOJI_FAIL} No active races."
-    ), ephemeral=True)
-
-@bot.slash_command(name="tasks", description="List your active racing accounts")
-async def tasks_cmd(ctx):
-    ut = next((t for t in tasks if t["discord_id"] == ctx.author.id), None)
-    if not ut or not ut["tasks"]:
-        return await ctx.respond(f"{EMOJI_FAIL} No active accounts.", ephemeral=True)
-    lines = "\n".join(f"{i+1}. {u}" for i, u in enumerate(ut["tasks"]))
-    await ctx.respond(embed=discord.Embed(
-        color=COLOR_OK, description=f"{EMOJI_OK} Active accounts:\n{lines}"
-    ), ephemeral=True)
-
-@bot.slash_command(name="tracker", description="Show how many races you’ve completed")
-async def tracker(ctx, username: Option(str, "NitroType username")):
-    rec = next((r for r in race_tracker
-                if r["discord_id"] == ctx.author.id and r["username"] == username.lower()), None)
-    if rec:
-        return await ctx.respond(embed=discord.Embed(
-            color=COLOR_OK,
-            description=f"{EMOJI_OK} `{username}` completed {rec['races']} races."
-        ), ephemeral=True)
-    await ctx.respond(embed=discord.Embed(
-        color=COLOR_FAIL,
-        description=f"{EMOJI_FAIL} No data for `{username}`."
-    ), ephemeral=True)
-
-@bot.slash_command(name="slots", description="Check how many slots you have")
-async def slots(ctx):
-    cnt = slot_count(ctx.author)
-    if cnt > 0:
-        return await ctx.respond(embed=discord.Embed(
-            color=COLOR_OK,
-            description=f"{EMOJI_OK} You have {cnt} slots."
-        ), ephemeral=True)
-    await ctx.respond(embed=discord.Embed(
-        color=COLOR_FAIL,
-        description=f"{EMOJI_FAIL} You have no slots."
-    ), ephemeral=True)
-
-@bot.slash_command(name="stats", description="(Admin) Show overall race stats")
-async def stats(ctx):
-    if ctx.author.id != ADMIN_ID:
-        return await ctx.respond(embed=discord.Embed(
-            color=COLOR_FAIL, description=f"{EMOJI_FAIL} Unauthorized."
-        ), ephemeral=True)
-    lines, total = [], 0
-    for r in race_tracker:
-        mention = f"<@{r['discord_id']}>"
-        lines.append(f"{mention} • {r['username']}: {r['races']} races")
-        total += r['races']
-    lines.append(f"**Total races:** {total}")
-    await ctx.respond(embed=discord.Embed(
-        color=COLOR_OK, description="\n".join(lines)
-    ), ephemeral=True)
-
-@bot.slash_command(name="admintasks", description="(Admin) Show users' active tasks")
-async def admintasks(ctx, discord_id: Option(str, "Discord user ID")):
-    if ctx.author.id != ADMIN_ID:
-        return await ctx.respond(embed=discord.Embed(
-            color=COLOR_FAIL, description=f"{EMOJI_FAIL} Unauthorized."
-        ), ephemeral=True)
-    uid = int(discord_id)
-    rec = next((t for t in tasks if t["discord_id"] == uid), None)
-    if not rec or not rec["tasks"]:
-        return await ctx.respond(f"{EMOJI_FAIL} No tasks for <@{uid}>", ephemeral=True)
-    lines = "\n".join(f"{i+1}. {u}" for i, u in enumerate(rec["tasks"]))
-    await ctx.respond(embed=discord.Embed(
-        color=COLOR_OK, description=f"Tasks for <@{uid}>:\n{lines}"
-    ), ephemeral=True)
-
-@bot.slash_command(name="adminstopall", description="(Admin) Stop all tasks for a user")
-async def adminstopall(ctx, discord_id: Option(str, "Discord user ID")):
-    if ctx.author.id != ADMIN_ID:
-        return await ctx.respond(embed=discord.Embed(
-            color=COLOR_FAIL, description=f"{EMOJI_FAIL} Unauthorized."
-        ), ephemeral=True)
-    uid = int(discord_id)
-    rec = next((t for t in tasks if t["discord_id"] == uid), None)
-    if rec:
-        rec["tasks"].clear()
-        return await ctx.respond(f"{EMOJI_OK} Cleared tasks for <@{uid}>", ephemeral=True)
-    await ctx.respond(f"{EMOJI_FAIL} No tasks to clear for <@{uid}>", ephemeral=True)
-
-# -------------------- RUN BOT --------------------
+# -----------------------------------------------------------------------------
+#  RUN FLASK
+# -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
