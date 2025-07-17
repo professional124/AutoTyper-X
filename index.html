@@ -1,125 +1,245 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>AutoTyper-Z Web Control</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AutoTyper-X Dashboard</title>
+  <!-- Bootstrap CSS -->
+  <link
+    href="https://cdn.jsdelivr.net/npm/bootstrap@5.4.0/dist/css/bootstrap.min.css"
+    rel="stylesheet"
+  />
   <style>
-    body { font-family: sans-serif; margin: 2rem; max-width: 600px; }
-    h1,h2 { color: #2c3e50; }
-    label { display: block; margin: 0.5rem 0; }
-    input[type=text], input[type=password], input[type=number] {
-      width: 100%; padding: 0.4rem; box-sizing: border-box;
+    body {
+      background: linear-gradient(135deg, #0d1b2a, #1b263b);
+      color: #e0e1dd;
+      min-height: 100vh;
     }
-    button { margin-top: 0.5rem; padding: 0.5rem 1rem; }
-    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; }
-    section { border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; }
+    .navbar-brand {
+      font-weight: bold;
+      font-size: 1.5rem;
+    }
+    .card {
+      background: rgba(27, 38, 59, 0.85);
+      border: none;
+    }
+    .card-header {
+      background: #1b263b;
+      font-weight: 600;
+    }
+    .form-control,
+    .form-select {
+      background: #0d1b2a;
+      border: 1px solid #415a77;
+      color: #e0e1dd;
+    }
+    .form-control:focus,
+    .form-select:focus {
+      border-color: #778da9;
+      box-shadow: none;
+    }
+    button {
+      min-width: 120px;
+    }
+    .output {
+      font-family: monospace;
+      white-space: pre-wrap;
+      background: #0d1b2a;
+      padding: 0.75rem;
+      border-radius: 0.25rem;
+      border: 1px solid #415a77;
+      max-height: 200px;
+      overflow-y: auto;
+    }
   </style>
 </head>
 <body>
-  <h1>AutoTyper-Z Web Control</h1>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-4">
+    <a class="navbar-brand" href="#">AutoTyper-X</a>
+    <div class="ms-auto">
+      <span class="navbar-text">Control Panel</span>
+    </div>
+  </nav>
 
-  <section>
-    <h2>API Token</h2>
-    <label>
-      <input type="text" id="api-token" placeholder="Enter your API_TOKEN" />
-    </label>
-  </section>
+  <div class="container py-4">
+    <div class="row gy-4">
+      <!-- Start Racer Card -->
+      <div class="col-md-6">
+        <div class="card shadow-sm">
+          <div class="card-header">Start Racer</div>
+          <div class="card-body">
+            <div class="mb-2">
+              <label class="form-label">API Token</label>
+              <input id="token" type="password" class="form-control" placeholder="Enter API token" />
+            </div>
+            <div class="row">
+              <div class="col-sm-6 mb-2">
+                <label class="form-label">Owner</label>
+                <input id="owner" type="text" class="form-control" placeholder="default" value="default"/>
+              </div>
+              <div class="col-sm-6 mb-2">
+                <label class="form-label">Username</label>
+                <input id="username" type="text" class="form-control" placeholder="NitroType user" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-sm-6 mb-2">
+                <label class="form-label">Password</label>
+                <input id="password" type="password" class="form-control" placeholder="••••••" />
+              </div>
+              <div class="col-sm-6 mb-2">
+                <label class="form-label">WPM</label>
+                <input id="wpm" type="number" class="form-control" min="30" max="170" value="60" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="col-sm-6 mb-2">
+                <label class="form-label">Races</label>
+                <input id="races" type="number" class="form-control" min="1" max="5000" value="10" />
+              </div>
+              <div class="col-sm-6 mb-2">
+                <label class="form-label">Accuracy %</label>
+                <input id="accuracy" type="number" class="form-control" min="0" max="100" value="90" />
+              </div>
+            </div>
+            <button id="btn-start" class="btn btn-primary mt-2">Start</button>
+            <div id="start-output" class="output mt-3"></div>
+          </div>
+        </div>
+      </div>
 
-  <section id="start">
-    <h2>Start Racing</h2>
-    <label>Owner (any name): <input type="text" id="owner-start" value="me" /></label>
-    <label>Username:  <input type="text" id="username-start" /></label>
-    <label>Password:  <input type="password" id="password-start" /></label>
-    <label>WPM:       <input type="number" id="wpm-start" value="80" min="30" max="170" /></label>
-    <label>Races:     <input type="number" id="races-start" value="10" min="1" max="5000" /></label>
-    <label>Min Acc%:  <input type="number" id="acc-start"   value="90" min="85" max="100" /></label>
-    <button onclick="startRacing()">▶️ Start</button>
-    <pre id="start-res"></pre>
-  </section>
+      <!-- Manage Tasks Card -->
+      <div class="col-md-6">
+        <div class="card shadow-sm">
+          <div class="card-header">Manage Tasks</div>
+          <div class="card-body">
+            <div class="mb-2">
+              <label class="form-label">Owner</label>
+              <input id="m-owner" type="text" class="form-control" placeholder="default" value="default"/>
+            </div>
+            <div class="mb-2">
+              <label class="form-label">Username (for stop)</label>
+              <input id="m-username" type="text" class="form-control" placeholder="NitroType user" />
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+              <button id="btn-stop" class="btn btn-warning">Stop Racer</button>
+              <button id="btn-stopall" class="btn btn-danger">Stop All</button>
+              <button id="btn-tasks" class="btn btn-secondary">List Tasks</button>
+            </div>
+            <div id="tasks-output" class="output mt-3"></div>
+          </div>
+        </div>
+      </div>
 
-  <section id="stop">
-    <h2>Stop Racing</h2>
-    <label>Owner:    <input type="text" id="owner-stop"  value="me" /></label>
-    <label>Username: <input type="text" id="username-stop" /></label>
-    <button onclick="stopRacing()">🛑 Stop</button>
-    <pre id="stop-res"></pre>
-  </section>
+      <!-- Statistics Card -->
+      <div class="col-12">
+        <div class="card shadow-sm">
+          <div class="card-header">Statistics & Tracker</div>
+          <div class="card-body">
+            <div class="row gy-2">
+              <div class="col-sm-4">
+                <button id="btn-tracker" class="btn btn-info w-100">Get Tracker</button>
+              </div>
+              <div class="col-sm-4">
+                <button id="btn-stats" class="btn btn-info w-100">Get Stats</button>
+              </div>
+              <div class="col-sm-4">
+                <button id="btn-admintasks" class="btn btn-info w-100">Admin Tasks</button>
+              </div>
+            </div>
+            <div id="stats-output" class="output mt-3"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-  <section id="tasks">
-    <h2>List Active Tasks</h2>
-    <label>Owner: <input type="text" id="owner-tasks" value="me" /></label>
-    <button onclick="getTasks()">📋 Tasks</button>
-    <pre id="tasks-res"></pre>
-  </section>
-
-  <section id="tracker">
-    <h2>Track Completed Races</h2>
-    <label>Owner:    <input type="text" id="owner-tracker"  value="me" /></label>
-    <label>Username: <input type="text" id="username-tracker" /></label>
-    <button onclick="getTracker()">🔍 Tracker</button>
-    <pre id="tracker-res"></pre>
-  </section>
-
+  <!-- Bootstrap JS & dependencies -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.4.0/dist/js/bootstrap.bundle.min.js"
+  ></script>
   <script>
-    const base = window.location.origin;
+    const API_BASE = "";
+
     function getToken() {
-      return document.getElementById("api-token").value.trim();
+      return document.getElementById("token").value.trim();
     }
-    function handleResponse(el, res) {
-      el.textContent = JSON.stringify(res, null, 2);
-    }
-    function startRacing() {
+
+    async function callApi(path, method = "GET", body = null, params = {}) {
       const token = getToken();
+      const url = new URL(API_BASE + path, window.location.origin);
+      url.searchParams.set("token", token);
+      Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+
+      const opts = { method };
+      if (body) {
+        opts.headers = { "Content-Type": "application/json" };
+        opts.body = JSON.stringify(body);
+      }
+      const res = await fetch(url, opts);
+      const text = await res.text();
+      try { return JSON.parse(text); }
+      catch { return text; }
+    }
+
+    // Start racer
+    document.getElementById("btn-start").onclick = async () => {
       const data = {
-        owner:    document.getElementById("owner-start").value,
-        username: document.getElementById("username-start").value,
-        password: document.getElementById("password-start").value,
-        wpm:      document.getElementById("wpm-start").value,
-        races:    document.getElementById("races-start").value,
-        min_acc:  document.getElementById("acc-start").value
+        owner: document.getElementById("owner").value,
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value,
+        wpm: document.getElementById("wpm").value,
+        race_amount: document.getElementById("races").value,
+        min_accuracy: document.getElementById("accuracy").value
       };
-      fetch(`${base}/start?token=${token}`, {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify(data)
-      })
-      .then(r => r.json())
-      .then(j => handleResponse(document.getElementById("start-res"), j))
-      .catch(e => handleResponse(document.getElementById("start-res"), {error:e.toString()}));
-    }
-    function stopRacing() {
-      const token = getToken();
+      const out = await callApi("/racer", "POST", data);
+      document.getElementById("start-output").innerText = JSON.stringify(out, null, 2);
+    };
+
+    // Stop single racer
+    document.getElementById("btn-stop").onclick = async () => {
       const data = {
-        owner:    document.getElementById("owner-stop").value,
-        username: document.getElementById("username-stop").value
+        owner: document.getElementById("m-owner").value,
+        username: document.getElementById("m-username").value
       };
-      fetch(`${base}/stop?token=${token}`, {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify(data)
-      })
-      .then(r => r.json())
-      .then(j => handleResponse(document.getElementById("stop-res"), j))
-      .catch(e => handleResponse(document.getElementById("stop-res"), {error:e.toString()}));
-    }
-    function getTasks() {
-      const token = getToken();
-      const owner = document.getElementById("owner-tasks").value;
-      fetch(`${base}/tasks?token=${token}&owner=${owner}`)
-        .then(r => r.json())
-        .then(j => handleResponse(document.getElementById("tasks-res"), j))
-        .catch(e => handleResponse(document.getElementById("tasks-res"), {error:e.toString()}));
-    }
-    function getTracker() {
-      const token = getToken();
-      const owner = document.getElementById("owner-tracker").value;
-      const user  = document.getElementById("username-tracker").value;
-      fetch(`${base}/tracker?token=${token}&owner=${owner}&username=${user}`)
-        .then(r => r.json())
-        .then(j => handleResponse(document.getElementById("tracker-res"), j))
-        .catch(e => handleResponse(document.getElementById("tracker-res"), {error:e.toString()}));
-    }
+      const out = await callApi("/stopracer", "POST", data);
+      document.getElementById("tasks-output").innerText = JSON.stringify(out, null, 2);
+    };
+
+    // Stop all racers
+    document.getElementById("btn-stopall").onclick = async () => {
+      const data = { owner: document.getElementById("m-owner").value };
+      const out = await callApi("/stopall", "POST", data);
+      document.getElementById("tasks-output").innerText = JSON.stringify(out, null, 2);
+    };
+
+    // List tasks
+    document.getElementById("btn-tasks").onclick = async () => {
+      const owner = document.getElementById("m-owner").value;
+      const out = await callApi("/tasks", "GET", null, { owner });
+      document.getElementById("tasks-output").innerText = JSON.stringify(out, null, 2);
+    };
+
+    // Get tracker for one user
+    document.getElementById("btn-tracker").onclick = async () => {
+      const owner = document.getElementById("m-owner").value;
+      const username = document.getElementById("m-username").value;
+      const out = await callApi("/tracker", "GET", null, { owner, username });
+      document.getElementById("stats-output").innerText = JSON.stringify(out, null, 2);
+    };
+
+    // Get overall stats
+    document.getElementById("btn-stats").onclick = async () => {
+      const out = await callApi("/stats", "GET");
+      document.getElementById("stats-output").innerText = JSON.stringify(out, null, 2);
+    };
+
+    // Admin tasks
+    document.getElementById("btn-admintasks").onclick = async () => {
+      const target_owner = document.getElementById("m-owner").value;
+      const out = await callApi("/admintasks", "GET", null, { target_owner });
+      document.getElementById("stats-output").innerText = JSON.stringify(out, null, 2);
+    };
   </script>
 </body>
 </html>
