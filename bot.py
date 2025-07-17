@@ -1,4 +1,5 @@
 import os
+import sys
 import random
 import threading
 import logging
@@ -19,39 +20,42 @@ from selenium.webdriver.common.keys import Keys
 # -----------------------------------------------------------------------------
 load_dotenv()
 API_TOKEN    = os.getenv("API_TOKEN")              # Your secret API key
-ADMIN_TOKEN  = os.getenv("ADMIN_TOKEN", API_TOKEN) # Use same token or separate
+ADMIN_TOKEN  = os.getenv("ADMIN_TOKEN", API_TOKEN) # Optional separate admin key
 PROXY_FILE   = "proxies.txt"                       # Must exist with ip:port lines
-CHROME_BIN   = "/usr/bin/chromium"
-DRIVER_BIN   = "/usr/bin/chromedriver"
+CHROME_BIN   = os.getenv("CHROME_BIN", "/usr/bin/chromium")
+DRIVER_BIN   = os.getenv("DRIVER_BIN", "/usr/bin/chromedriver")
 
 # -----------------------------------------------------------------------------
 #  STATE TRACKERS (IN-MEMORY)
 # -----------------------------------------------------------------------------
-tasks        = []   # [ {owner: str, tasks: [username,...]}, ... ]
-race_tracker = []   # [ {owner: str, username: str, races: int}, ... ]
+tasks        = []   # [ {owner: str, tasks: [username,…]}, … ]
+race_tracker = []   # [ {owner: str, username: str, races: int}, … ]
 
 # -----------------------------------------------------------------------------
-#  LOGGING SETUP
+#  LOGGING SETUP (file + stdout for Render)
 # -----------------------------------------------------------------------------
 os.makedirs("logs", exist_ok=True)
 logfile = f"logs/{datetime.now():%Y-%m-%d_%H-%M-%S}.log"
+
+# Remove default handlers, then log to file and console
+for h in logging.root.handlers[:]:
+    logging.root.removeHandler(h)
+
 logging.basicConfig(
-    filename=logfile,
-    filemode="w",
     level=logging.INFO,
-    format="[%(asctime)s] %(levelname)s: %(message)s"
+    format="[%(asctime)s] %(levelname)s: %(message)s",
+    handlers=[
+        logging.FileHandler(logfile),
+        logging.StreamHandler(sys.stdout),
+    ]
 )
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # -----------------------------------------------------------------------------
-#  FLASK APP (serving root index.html + API)
+#  FLASK APP (serving root + API)
 # -----------------------------------------------------------------------------
-app = Flask(
-    __name__,
-    static_folder=".",        # serve any file in repo root
-    static_url_path=""        # so /index.html works
-)
+app = Flask(__name__, static_folder=".", static_url_path="")
 
 def require_token(fn):
     def wrapper(*args, **kwargs):
@@ -64,27 +68,24 @@ def require_token(fn):
 
 @app.route("/", methods=["GET"])
 def serve_index():
-    """
-    Serve your root index.html when someone visits /
-    """
+    """Serve the frontend index.html"""
     return send_from_directory(os.getcwd(), "index.html")
 
 # -----------------------------------------------------------------------------
 #  HTTP API ENDPOINTS
 # -----------------------------------------------------------------------------
-
 @app.route("/racer", methods=["POST"])
 @require_token
 def http_racer():
-    data = request.get_json() or {}
-    owner      = data.get("owner", "default")
-    username   = data.get("username")
-    password   = data.get("password")
-    wpm        = int(data.get("wpm", 60))
-    races      = int(data.get("race_amount", data.get("races", 10)))
-    min_acc    = int(data.get("min_accuracy", data.get("min_acc", 90)))
+    data     = request.get_json() or {}
+    owner    = data.get("owner", "default")
+    username = data.get("username")
+    password = data.get("password")
+    wpm      = int(data.get("wpm", 60))
+    races    = int(data.get("race_amount", data.get("races", 10)))
+    min_acc  = int(data.get("min_accuracy", data.get("min_acc", 90)))
 
-    # Basic validation
+    # Validation
     if not username or not password:
         return jsonify(error="username & password required"), 400
     if races < 1 or races > 5000:
@@ -94,15 +95,20 @@ def http_racer():
     if min_acc < 0 or min_acc > 100:
         return jsonify(error="min_accuracy must be 0–100"), 400
 
-    # Launch racing in background
     proxy = _get_proxy()
-    threading.Thread(
-        target=_main_module,
-        args=(owner, username, password, wpm, races, min_acc, proxy),
-        daemon=True
-    ).start()
+    try:
+        t = threading.Thread(
+            target=_main_module,
+            args=(owner, username, password, wpm, races, min_acc, proxy),
+            daemon=True
+        )
+        t.start()
+        logger.info(f"Racer thread launched for {username}@{owner} ✔️")
+    except Exception as e:
+        logger.error(f"Failed to launch racer for {username}@{owner} ❌: {e}")
+        return jsonify(error="internal error"), 500
 
-    # Track active tasks
+    # Track active task
     rec = next((t for t in tasks if t["owner"] == owner), None)
     if not rec:
         rec = {"owner": owner, "tasks": []}
@@ -111,15 +117,17 @@ def http_racer():
 
     return jsonify(
         status="started",
-        owner=owner, username=username,
-        wpm=wpm, race_amount=races,
+        owner=owner,
+        username=username,
+        wpm=wpm,
+        race_amount=races,
         min_accuracy=min_acc
     ), 200
 
 @app.route("/stopracer", methods=["POST"])
 @require_token
 def http_stopracer():
-    data = request.get_json() or {}
+    data     = request.get_json() or {}
     owner    = data.get("owner", "default")
     username = data.get("username", "").lower()
     rec = next((t for t in tasks if t["owner"] == owner), None)
@@ -131,7 +139,7 @@ def http_stopracer():
 @app.route("/stopall", methods=["POST"])
 @require_token
 def http_stopall():
-    data = request.get_json() or {}
+    data  = request.get_json() or {}
     owner = data.get("owner", "default")
     rec = next((t for t in tasks if t["owner"] == owner), None)
     if rec:
@@ -174,7 +182,7 @@ def http_stats():
 @require_token
 def http_admintasks():
     target = request.args.get("target_owner", "")
-    rec = next((t for t in tasks if t["owner"] == target), None)
+    rec    = next((t for t in tasks if t["owner"] == target), None)
     if rec:
         return jsonify(owner=target, tasks=rec["tasks"]), 200
     return jsonify(error="no tasks"), 404
@@ -182,9 +190,9 @@ def http_admintasks():
 @app.route("/adminstopall", methods=["POST"])
 @require_token
 def http_adminstopall():
-    data = request.get_json() or {}
+    data   = request.get_json() or {}
     target = data.get("target_owner", "")
-    rec = next((t for t in tasks if t["owner"] == target), None)
+    rec    = next((t for t in tasks if t["owner"] == target), None)
     if rec:
         rec["tasks"].clear()
         return jsonify(status="cleared", owner=target), 200
@@ -214,18 +222,18 @@ def _record_success(owner: str, username: str):
 
 def _setup_driver(proxy: str = None):
     opts = Options()
-    opts.headless         = True
-    opts.binary_location  = CHROME_BIN
+    opts.headless        = True
+    opts.binary_location = CHROME_BIN
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
     if proxy:
         opts.add_argument(f"--proxy-server=http://{proxy}")
-    svc = Service(DRIVER_BIN)
-    d   = webdriver.Chrome(service=svc, options=opts)
-    d.set_window_size(1200, 800)
-    return d
+    svc    = Service(DRIVER_BIN)
+    driver = webdriver.Chrome(service=svc, options=opts)
+    driver.set_window_size(1200, 800)
+    return driver
 
 def _login(driver, username: str, password: str) -> bool:
     driver.get("https://www.nitrotype.com/login")
@@ -235,7 +243,10 @@ def _login(driver, username: str, password: str) -> bool:
     driver.find_element(By.CSS_SELECTOR, 'button[data-cy="login-button"]').click()
     time.sleep(4)
     ok = "race" in driver.current_url or "garage" in driver.current_url
-    logger.info(f"[{username}] login {'OK' if ok else 'FAIL'}")
+    if ok:
+        logger.info(f"[{username}] login OK ✔️")
+    else:
+        logger.error(f"[{username}] login FAIL ❌")
     return ok
 
 def _get_race_text(driver) -> str:
@@ -254,7 +265,7 @@ def _run_race(driver, idx: int, wpm: int, acc: int) -> bool:
     time.sleep(3)
     text = _get_race_text(driver)
     if not text:
-        logger.warning(f"Race #{idx}: no text")
+        logger.warning(f"Race #{idx}: no text ❗")
         return False
     try:
         box = driver.find_element(By.CSS_SELECTOR, "[contenteditable='true']")
@@ -269,29 +280,39 @@ def _run_race(driver, idx: int, wpm: int, acc: int) -> bool:
         else:
             box.send_keys("x")
         box.send_keys(" ")
-    logger.info(f"Race #{idx} done")
+    logger.debug(f"Race #{idx} done")
     return True
 
 def _main_module(owner, username, password, wpm, races, acc, proxy):
-    d = None
+    driver = None
+    success_count = 0
+
+    logger.info(f"[{username}] session start: {races} races @ {wpm}wpm, {acc}% acc, proxy={proxy}")
+
     try:
-        d = _setup_driver(proxy)
-        if not _login(d, username, password):
-            raise RuntimeError("Login failed")
+        driver = _setup_driver(proxy)
+        if not _login(driver, username, password):
+            return
+
         for i in range(1, races+1):
-            ok = _run_race(d, i, wpm, acc)
-            if ok:
+            if _run_race(driver, i, wpm, acc):
                 _record_success(owner, username)
-            time.sleep(random.randint(3,8))
-        logger.info(f"[{username}] session complete ({races} races)")
+                success_count += 1
+            time.sleep(random.randint(3, 8))
+
+        if success_count == races:
+            logger.info(f"[{username}] all {races} races completed ✔️")
+        else:
+            logger.warning(f"[{username}] completed {success_count}/{races} races ❗")
+
     except Exception as e:
-        logger.exception(f"[{username}] ERROR")
+        logger.error(f"[{username}] session error ❌: {e}")
     finally:
-        if d:
-            d.quit()
+        if driver:
+            driver.quit()
 
 # -----------------------------------------------------------------------------
-#  RUN FLASK
+#  RUN FLASK APP
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     app.run(
