@@ -5,7 +5,7 @@ import logging
 import time
 from datetime import datetime
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 from fake_useragent import UserAgent
 from selenium import webdriver
@@ -45,9 +45,13 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # -----------------------------------------------------------------------------
-#  FLASK APP
+#  FLASK APP (serving root index.html + API)
 # -----------------------------------------------------------------------------
-app = Flask(__name__)
+app = Flask(
+    __name__,
+    static_folder=".",        # serve any file in repo root
+    static_url_path=""        # so /index.html works
+)
 
 def require_token(fn):
     def wrapper(*args, **kwargs):
@@ -57,6 +61,17 @@ def require_token(fn):
         return fn(*args, **kwargs)
     wrapper.__name__ = fn.__name__
     return wrapper
+
+@app.route("/", methods=["GET"])
+def serve_index():
+    """
+    Serve your root index.html when someone visits /
+    """
+    return send_from_directory(os.getcwd(), "index.html")
+
+# -----------------------------------------------------------------------------
+#  HTTP API ENDPOINTS
+# -----------------------------------------------------------------------------
 
 @app.route("/racer", methods=["POST"])
 @require_token
@@ -94,10 +109,12 @@ def http_racer():
         tasks.append(rec)
     rec["tasks"].append(username.lower())
 
-    return jsonify(status="started",
-                   owner=owner, username=username,
-                   wpm=wpm, race_amount=races,
-                   min_accuracy=min_acc), 200
+    return jsonify(
+        status="started",
+        owner=owner, username=username,
+        wpm=wpm, race_amount=races,
+        min_accuracy=min_acc
+    ), 200
 
 @app.route("/stopracer", methods=["POST"])
 @require_token
@@ -131,8 +148,8 @@ def http_tasks():
 @app.route("/tracker", methods=["GET"])
 @require_token
 def http_tracker():
-    owner   = request.args.get("owner", "default")
-    username= request.args.get("username", "").lower()
+    owner    = request.args.get("owner", "default")
+    username = request.args.get("username", "").lower()
     rec = next((r for r in race_tracker
                 if r["owner"] == owner and r["username"] == username), None)
     if rec:
@@ -142,7 +159,6 @@ def http_tracker():
 @app.route("/stats", methods=["GET"])
 @require_token
 def http_stats():
-    # same token for admin
     summary = []
     total   = 0
     for r in race_tracker:
@@ -278,4 +294,8 @@ def _main_module(owner, username, password, wpm, races, acc, proxy):
 #  RUN FLASK
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+    app.run(
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 10000)),
+        debug=False
+    )
