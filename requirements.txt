@@ -1,10 +1,4 @@
-selenium
-python-dotenv
-py-cord
-requests
-cloudscraper
-capsolver
-websocket-client
-fake-useragent
-flask
-audioop-lts; python_version >= "3.13"
+Flask>=2.2.5
+python-dotenv>=1.0.0
+fake-useragent>=0.1.11
+selenium>=4.11.2
