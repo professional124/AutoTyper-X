@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AutoTyper-Z Web Control</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; max-width: 600px; }
+    h1,h2 { color: #2c3e50; }
+    label { display: block; margin: 0.5rem 0; }
+    input[type=text], input[type=password], input[type=number] {
+      width: 100%; padding: 0.4rem; box-sizing: border-box;
+    }
+    button { margin-top: 0.5rem; padding: 0.5rem 1rem; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; }
+    section { border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>AutoTyper-Z Web Control</h1>
+
+  <section>
+    <h2>API Token</h2>
+    <label>
+      <input type="text" id="api-token" placeholder="Enter your API_TOKEN" />
+    </label>
+  </section>
+
+  <section id="start">
+    <h2>Start Racing</h2>
+    <label>Owner (any name): <input type="text" id="owner-start" value="me" /></label>
+    <label>Username:  <input type="text" id="username-start" /></label>
+    <label>Password:  <input type="password" id="password-start" /></label>
+    <label>WPM:       <input type="number" id="wpm-start" value="80" min="30" max="170" /></label>
+    <label>Races:     <input type="number" id="races-start" value="10" min="1" max="5000" /></label>
+    <label>Min Acc%:  <input type="number" id="acc-start"   value="90" min="85" max="100" /></label>
+    <button onclick="startRacing()">▶️ Start</button>
+    <pre id="start-res"></pre>
+  </section>
+
+  <section id="stop">
+    <h2>Stop Racing</h2>
+    <label>Owner:    <input type="text" id="owner-stop"  value="me" /></label>
+    <label>Username: <input type="text" id="username-stop" /></label>
+    <button onclick="stopRacing()">🛑 Stop</button>
+    <pre id="stop-res"></pre>
+  </section>
+
+  <section id="tasks">
+    <h2>List Active Tasks</h2>
+    <label>Owner: <input type="text" id="owner-tasks" value="me" /></label>
+    <button onclick="getTasks()">📋 Tasks</button>
+    <pre id="tasks-res"></pre>
+  </section>
+
+  <section id="tracker">
+    <h2>Track Completed Races</h2>
+    <label>Owner:    <input type="text" id="owner-tracker"  value="me" /></label>
+    <label>Username: <input type="text" id="username-tracker" /></label>
+    <button onclick="getTracker()">🔍 Tracker</button>
+    <pre id="tracker-res"></pre>
+  </section>
+
+  <script>
+    const base = window.location.origin;
+    function getToken() {
+      return document.getElementById("api-token").value.trim();
+    }
+    function handleResponse(el, res) {
+      el.textContent = JSON.stringify(res, null, 2);
+    }
+    function startRacing() {
+      const token = getToken();
+      const data = {
+        owner:    document.getElementById("owner-start").value,
+        username: document.getElementById("username-start").value,
+        password: document.getElementById("password-start").value,
+        wpm:      document.getElementById("wpm-start").value,
+        races:    document.getElementById("races-start").value,
+        min_acc:  document.getElementById("acc-start").value
+      };
+      fetch(`${base}/start?token=${token}`, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(data)
+      })
+      .then(r => r.json())
+      .then(j => handleResponse(document.getElementById("start-res"), j))
+      .catch(e => handleResponse(document.getElementById("start-res"), {error:e.toString()}));
+    }
+    function stopRacing() {
+      const token = getToken();
+      const data = {
+        owner:    document.getElementById("owner-stop").value,
+        username: document.getElementById("username-stop").value
+      };
+      fetch(`${base}/stop?token=${token}`, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(data)
+      })
+      .then(r => r.json())
+      .then(j => handleResponse(document.getElementById("stop-res"), j))
+      .catch(e => handleResponse(document.getElementById("stop-res"), {error:e.toString()}));
+    }
+    function getTasks() {
+      const token = getToken();
+      const owner = document.getElementById("owner-tasks").value;
+      fetch(`${base}/tasks?token=${token}&owner=${owner}`)
+        .then(r => r.json())
+        .then(j => handleResponse(document.getElementById("tasks-res"), j))
+        .catch(e => handleResponse(document.getElementById("tasks-res"), {error:e.toString()}));
+    }
+    function getTracker() {
+      const token = getToken();
+      const owner = document.getElementById("owner-tracker").value;
+      const user  = document.getElementById("username-tracker").value;
+      fetch(`${base}/tracker?token=${token}&owner=${owner}&username=${user}`)
+        .then(r => r.json())
+        .then(j => handleResponse(document.getElementById("tracker-res"), j))
+        .catch(e => handleResponse(document.getElementById("tracker-res"), {error:e.toString()}));
+    }
+  </script>
+</body>
+</html>
