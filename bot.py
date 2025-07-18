@@ -4,6 +4,8 @@ import random
 import threading
 import logging
 import time
+import tempfile
+import shutil
 from datetime import datetime
 
 from flask import Flask, request, jsonify, send_from_directory
@@ -32,7 +34,7 @@ tasks        = []   # [ {owner: str, tasks: [username,…]}, … ]
 race_tracker = []   # [ {owner: str, username: str, races: int}, … ]
 
 # -----------------------------------------------------------------------------
-#  LOGGING SETUP (file + stdout for Render)
+#  LOGGING SETUP (file + stdout)
 # -----------------------------------------------------------------------------
 os.makedirs("logs", exist_ok=True)
 logfile = f"logs/{datetime.now():%Y-%m-%d_%H-%M-%S}.log"
@@ -221,6 +223,7 @@ def _record_success(owner: str, username: str):
         race_tracker.append({"owner": owner, "username": uname, "races": 1})
 
 def _setup_driver(proxy: str = None):
+    """Set up headless ChromeDriver with a unique profile directory."""
     opts = Options()
     opts.headless        = True
     opts.binary_location = CHROME_BIN
@@ -228,12 +231,18 @@ def _setup_driver(proxy: str = None):
     opts.add_argument("--disable-gpu")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
+
+    # unique user data directory to avoid conflicts
+    profile_dir = tempfile.mkdtemp()
+    opts.add_argument(f"--user-data-dir={profile_dir}")
+
     if proxy:
         opts.add_argument(f"--proxy-server=http://{proxy}")
+
     svc    = Service(DRIVER_BIN)
     driver = webdriver.Chrome(service=svc, options=opts)
     driver.set_window_size(1200, 800)
-    return driver
+    return driver, profile_dir
 
 def _login(driver, username: str, password: str) -> bool:
     driver.get("https://www.nitrotype.com/login")
@@ -285,12 +294,13 @@ def _run_race(driver, idx: int, wpm: int, acc: int) -> bool:
 
 def _main_module(owner, username, password, wpm, races, acc, proxy):
     driver = None
+    profile_dir = None
     success_count = 0
 
     logger.info(f"[{username}] session start: {races} races @ {wpm}wpm, {acc}% acc, proxy={proxy}")
 
     try:
-        driver = _setup_driver(proxy)
+        driver, profile_dir = _setup_driver(proxy)
         if not _login(driver, username, password):
             return
 
@@ -310,6 +320,8 @@ def _main_module(owner, username, password, wpm, races, acc, proxy):
     finally:
         if driver:
             driver.quit()
+        if profile_dir:
+            shutil.rmtree(profile_dir, ignore_errors=True)
 
 # -----------------------------------------------------------------------------
 #  RUN FLASK APP
