@@ -15,8 +15,9 @@ from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
-# webdriver-manager
+# webdriver-manager for automatic driver management
 from webdriver_manager.chrome import ChromeDriverManager
 
 # -----------------------------------------------------------------------------
@@ -35,7 +36,7 @@ tasks        = []  # [ {owner, tasks:[username,...]}, ... ]
 race_tracker = []  # [ {owner, username, races}, ... ]
 
 # -----------------------------------------------------------------------------
-#  LOGGING (file + stdout)
+#  LOGGING SETUP (file + stdout)
 # -----------------------------------------------------------------------------
 os.makedirs("logs", exist_ok=True)
 logfile = f"logs/{datetime.now():%Y-%m-%d_%H-%M-%S}.log"
@@ -54,7 +55,7 @@ logging.basicConfig(
 logger = logging.getLogger()
 
 # -----------------------------------------------------------------------------
-#  FLASK SETUP
+#  FLASK APP SETUP
 # -----------------------------------------------------------------------------
 app = Flask(__name__, static_folder=".", static_url_path="")
 
@@ -88,7 +89,6 @@ def http_racer():
     if not user or not pw:
         return jsonify(error="username & password required"), 400
 
-    # Kick off thread
     proxy = _get_proxy()
     try:
         t = threading.Thread(
@@ -102,7 +102,6 @@ def http_racer():
         logger.error(f"Failed to launch racer for {user}@{owner} ❌: {e}")
         return jsonify(error="internal error"), 500
 
-    # Track active job
     rec = next((r for r in tasks if r["owner"] == owner), None)
     if not rec:
         rec = {"owner": owner, "tasks": []}
@@ -203,13 +202,12 @@ def _record_success(owner: str, username: str):
 
 def _setup_driver(proxy: str = None):
     """
-    Each session gets a fresh ChromeDriver via webdriver-manager
-    and a unique user-data-dir for profile isolation.
+    Each session gets:
+      - A fresh ChromeDriver via webdriver-manager
+      - A unique --user-data-dir for profile isolation
     """
-    # new Options() per call
     opts = Options()
     opts.binary_location = CHROME_BIN
-    # use new headless mode for Chrome 109+
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-gpu")
@@ -219,16 +217,12 @@ def _setup_driver(proxy: str = None):
     if proxy:
         opts.add_argument(f"--proxy-server=http://{proxy}")
 
-    # unique profile dir
     profile_dir = tempfile.mkdtemp(prefix="selenium-profile-")
     opts.add_argument(f"--user-data-dir={profile_dir}")
     logger.info(f"Using profile dir: {profile_dir}")
 
-    # let webdriver-manager install and start the matching driver
-    driver = webdriver.Chrome(
-        executable_path=ChromeDriverManager().install(),
-        options=opts
-    )
+    service = Service(ChromeDriverManager().install())
+    driver  = webdriver.Chrome(service=service, options=opts)
     driver.set_window_size(1200, 800)
     return driver, profile_dir
 
@@ -237,7 +231,8 @@ def _login(driver, user: str, pw: str) -> bool:
     time.sleep(2)
     driver.find_element(By.NAME, "username").send_keys(user)
     driver.find_element(By.NAME, "password").send_keys(pw)
-    driver.find_element(By.CSS_SELECTOR, 'button[data-cy="login-button"]').click()
+    driver.find_element(By.CSS_SELECTOR,
+        'button[data-cy="login-button"]').click()
     time.sleep(4)
     ok = any(x in driver.current_url for x in ("race", "garage"))
     logger.info(f"[{user}] login {'OK ✔️' if ok else 'FAIL ❌'}")
@@ -262,15 +257,14 @@ def _run_race(driver, idx: int, wpm: int, acc: int) -> bool:
         logger.warning(f"Race #{idx}: no text ❗")
         return False
 
-    # find the typing box
     inputs = driver.find_elements(By.CSS_SELECTOR, "[contenteditable='true']")
     box = inputs[0] if inputs else driver.find_element(By.TAG_NAME, "body")
 
     for w in text.split():
-        if random.randint(1, 100) <= acc:
+        if random.randint(1,100) <= acc:
             for ch in w:
                 box.send_keys(ch)
-                time.sleep(random.uniform(60 / wpm / 5, 60 / wpm / 2))
+                time.sleep(random.uniform(60/wpm/5, 60/wpm/2))
         else:
             box.send_keys("x")
         box.send_keys(" ")
@@ -307,7 +301,7 @@ def _main_module(owner, user, pw, wpm, races, acc, proxy):
             shutil.rmtree(profile_dir, ignore_errors=True)
 
 # -----------------------------------------------------------------------------
-#  RUN SERVER
+#  RUN FLASK APP
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     app.run(
