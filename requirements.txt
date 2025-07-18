@@ -1,5 +1,4 @@
 Flask
 python-dotenv
 selenium
-fake-useragent
 webdriver-manager
