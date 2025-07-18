@@ -12,15 +12,10 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Response
+from fastapi import FastAPI, HTTPException, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from prometheus_client import (
-    CollectorRegistry,
-    Counter,
-    generate_latest,
-    CONTENT_TYPE_LATEST,
-)
+from prometheus_client import CollectorRegistry, Counter, generate_latest, CONTENT_TYPE_LATEST
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
@@ -49,15 +44,21 @@ if not API_TOKEN:
 # PROMETHEUS METRICS (single custom registry)
 # -----------------------------------------------------------------------------
 registry = CollectorRegistry()
-races_started   = Counter("races_started_total",
-                          "Number of race sessions started",
-                          registry=registry)
-races_completed = Counter("races_completed_total",
-                          "Number of successfully completed race sessions",
-                          registry=registry)
-races_failed    = Counter("races_failed_total",
-                          "Number of failed race sessions",
-                          registry=registry)
+races_started   = Counter(
+    "races_started_total",
+    "Number of race sessions started",
+    registry=registry
+)
+races_completed = Counter(
+    "races_completed_total",
+    "Number of successfully completed race sessions",
+    registry=registry
+)
+races_failed    = Counter(
+    "races_failed_total",
+    "Number of failed race sessions",
+    registry=registry
+)
 
 # -----------------------------------------------------------------------------
 # FASTAPI APP & MIDDLEWARE
@@ -103,8 +104,12 @@ class RacerIn(BaseModel):
     username:    str
     password:    str
     wpm:         int = Field(60, ge=30, le=170)
-    races:       int = Field(10, alias="race_amount", ge=1, le=5000)
+    race_amount: int = Field(10, alias="races", ge=1, le=5000)
     min_acc:     int = Field(90, alias="min_accuracy", ge=0, le=100)
+
+class StopRequest(BaseModel):
+    owner:    str = Field("default")
+    username: str
 
 class StatusOut(BaseModel):
     status:   str
@@ -124,7 +129,10 @@ def _get_proxy() -> Optional[str]:
 
 def _get_chrome_version() -> Optional[str]:
     try:
-        out = subprocess.check_output([CHROME_BIN, "--version"], stderr=subprocess.DEVNULL)
+        out = subprocess.check_output(
+            [CHROME_BIN, "--version"],
+            stderr=subprocess.DEVNULL
+        )
         return out.decode().split(" ")[1].strip()
     except:
         return None
@@ -143,7 +151,6 @@ def _driver(proxy: Optional[str]):
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
-    # random user agent to reduce fingerprinting
     opts.add_argument(f"--user-agent={UserAgent().random}")
     if proxy:
         opts.add_argument(f"--proxy-server=http://{proxy}")
@@ -201,7 +208,6 @@ def _run_session(cfg: RacerIn):
             if not text:
                 continue
 
-            # find input box
             boxes = driver.find_elements(By.CSS_SELECTOR, "[contenteditable='true']")
             box = boxes[0] if boxes else driver.find_element(By.TAG_NAME, "body")
 
@@ -235,39 +241,48 @@ async def health():
     dependencies=[require_token()]
 )
 async def start_racer(body: RacerIn):
-    # enqueue job
     executor.submit(_run_session, body)
-
-    # track active task
     uname = body.username.lower()
     with tasks_lock:
         lst = tasks.setdefault(body.owner, [])
         if uname not in lst:
             lst.append(uname)
-
     return StatusOut(status="started", owner=body.owner, username=body.username)
 
-@app.post("/stopracer", dependencies=[require_token()])
-async def stop_racer(owner: str = Field("default"), username: str = Field(...)):
-    uname = username.lower()
+@app.post(
+    "/stopracer",
+    response_model=StatusOut,
+    dependencies=[require_token()]
+)
+async def stop_racer(body: StopRequest):
+    uname = body.username.lower()
     with tasks_lock:
-        lst = tasks.get(owner, [])
+        lst = tasks.get(body.owner, [])
         if uname in lst:
             lst.remove(uname)
-            return {"status": "stopped", "owner": owner, "username": uname}
+            return StatusOut(status="stopped", owner=body.owner, username=body.username)
     raise HTTPException(status_code=404, detail="task not found")
 
-@app.post("/stopall", dependencies=[require_token()])
-async def stop_all(owner: str = Field("default")):
+@app.post(
+    "/stopall",
+    dependencies=[require_token()]
+)
+async def stop_all(body: StopRequest):
     with tasks_lock:
-        tasks.get(owner, []).clear()
-    return {"status": "stopped_all", "owner": owner}
+        tasks.get(body.owner, []).clear()
+    return {"status": "stopped_all", "owner": body.owner}
 
-@app.get("/tasks", dependencies=[require_token()])
+@app.get(
+    "/tasks",
+    dependencies=[require_token()]
+)
 async def get_tasks(owner: str = "default"):
     return {"owner": owner, "tasks": tasks.get(owner, [])}
 
-@app.get("/tracker", dependencies=[require_token()])
+@app.get(
+    "/tracker",
+    dependencies=[require_token()]
+)
 async def get_tracker(owner: str = "default", username: str = ""):
     uname = username.lower()
     count = race_tracker.get(owner, {}).get(uname)
@@ -275,24 +290,34 @@ async def get_tracker(owner: str = "default", username: str = ""):
         return {"owner": owner, "username": uname, "races": count}
     raise HTTPException(status_code=404, detail="no data")
 
-@app.get("/stats", dependencies=[require_token()])
+@app.get(
+    "/stats",
+    dependencies=[require_token()]
+)
 async def stats():
-    results = []
-    for owner, usermap in race_tracker.items():
-        for user, cnt in usermap.items():
-            results.append({"owner": owner, "username": user, "races": cnt})
+    results = [
+        {"owner": owner, "username": user, "races": cnt}
+        for owner, users in race_tracker.items()
+        for user, cnt in users.items()
+    ]
     total = sum(r["races"] for r in results)
     return {"total_races": total, "results": results}
 
-@app.get("/admintasks", dependencies=[require_token(admin=True)])
+@app.get(
+    "/admintasks",
+    dependencies=[require_token(admin=True)]
+)
 async def admin_tasks(target_owner: str = ""):
     return {"owner": target_owner, "tasks": tasks.get(target_owner, [])}
 
-@app.post("/adminstopall", dependencies=[require_token(admin=True)])
-async def admin_stop_all(target_owner: str = ""):
+@app.post(
+    "/adminstopall",
+    dependencies=[require_token(admin=True)]
+)
+async def admin_stop_all(body: StopRequest):
     with tasks_lock:
-        tasks.get(target_owner, []).clear()
-    return {"status": "cleared", "owner": target_owner}
+        tasks.get(body.owner, []).clear()
+    return {"status": "cleared", "owner": body.owner}
 
 @app.get("/metrics")
 async def metrics():
