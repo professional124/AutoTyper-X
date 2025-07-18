@@ -223,7 +223,7 @@ def _record_success(owner: str, username: str):
         race_tracker.append({"owner": owner, "username": uname, "races": 1})
 
 def _setup_driver(proxy: str = None):
-    """Set up headless ChromeDriver with a unique profile directory."""
+    """Set up headless ChromeDriver with a unique profile directory (with retries)."""
     opts = Options()
     opts.headless        = True
     opts.binary_location = CHROME_BIN
@@ -232,17 +232,25 @@ def _setup_driver(proxy: str = None):
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
 
-    # unique user data directory to avoid conflicts
-    profile_dir = tempfile.mkdtemp()
-    opts.add_argument(f"--user-data-dir={profile_dir}")
-
     if proxy:
         opts.add_argument(f"--proxy-server=http://{proxy}")
 
-    svc    = Service(DRIVER_BIN)
-    driver = webdriver.Chrome(service=svc, options=opts)
-    driver.set_window_size(1200, 800)
-    return driver, profile_dir
+    profile_dir = None
+    for attempt in range(3):
+        # each attempt uses a fresh temp profile
+        profile_dir = tempfile.mkdtemp()
+        opts.add_argument(f"--user-data-dir={profile_dir}")
+        try:
+            svc = Service(DRIVER_BIN)
+            driver = webdriver.Chrome(service=svc, options=opts)
+            driver.set_window_size(1200, 800)
+            return driver, profile_dir
+        except Exception:
+            # cleanup and retry
+            shutil.rmtree(profile_dir, ignore_errors=True)
+            time.sleep(0.2)
+            if attempt == 2:
+                raise
 
 def _login(driver, username: str, password: str) -> bool:
     driver.get("https://www.nitrotype.com/login")
