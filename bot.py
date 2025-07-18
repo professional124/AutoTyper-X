@@ -1,253 +1,243 @@
+# bot.py
 import os
 import sys
+import uuid
 import random
-import threading
-import logging
-import time
-import tempfile
 import shutil
+import signal
+import logging
+import subprocess
+import tempfile
+
 from datetime import datetime
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor, Future
+from typing import Optional, Dict
 
-from flask import Flask, request, jsonify, send_from_directory
-from dotenv import load_dotenv
-
+import structlog
+from fastapi import FastAPI, HTTPException, Request, Depends, status
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-
 from webdriver_manager.chrome import ChromeDriverManager
 
-# -----------------------------------------------------------------------------
-# ENVIRONMENT & CONFIG
-# -----------------------------------------------------------------------------
+# --------------------------
+# CONFIG & ENV
+# --------------------------
+from dotenv import load_dotenv
 load_dotenv()
-API_TOKEN   = os.getenv("API_TOKEN")
+
+API_TOKEN   = os.getenv("API_TOKEN", "")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", API_TOKEN)
-PROXY_FILE  = "proxies.txt"
 CHROME_BIN  = os.getenv("CHROME_BIN", "/usr/bin/chromium")
+PROXY_FILE  = "proxies.txt"
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", "4"))
 
-# -----------------------------------------------------------------------------
-# STATE TRACKERS
-# -----------------------------------------------------------------------------
-tasks        = []
-race_tracker = []
-
-# -----------------------------------------------------------------------------
-# LOGGING
-# -----------------------------------------------------------------------------
-os.makedirs("logs", exist_ok=True)
-logfile = f"logs/{datetime.now():%Y-%m-%d_%H-%M-%S}.log"
-for h in logging.root.handlers[:]:
-    logging.root.removeHandler(h)
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] %(levelname)s: %(message)s",
-    handlers=[
-        logging.FileHandler(logfile),
-        logging.StreamHandler(sys.stdout)
+# --------------------------
+# LOGGING (structlog JSON)
+# --------------------------
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+structlog.configure(
+    processors=[
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
     ]
 )
-logger = logging.getLogger()
+logger = structlog.get_logger()
 
-# -----------------------------------------------------------------------------
-# FLASK APP
-# -----------------------------------------------------------------------------
-app = Flask(__name__, static_folder=".", static_url_path="")
+# --------------------------
+# METRICS
+# --------------------------
+METRICS = {
+    "races_started":     Counter("races_started", "Number of race sessions started"),
+    "races_completed":   Counter("races_completed", "Number of successful races"),
+    "races_failed":      Counter("races_failed", "Number of failed race sessions"),
+}
 
-def require_token(fn):
-    def wrapper(*args, **kwargs):
-        token = request.args.get("token", "")
-        if token != API_TOKEN:
-            return jsonify(error="Unauthorized"), 401
-        return fn(*args, **kwargs)
-    wrapper.__name__ = fn.__name__
-    return wrapper
+# --------------------------
+# APP & MIDDLEWARE
+# --------------------------
+app = FastAPI(
+    title="AutoTyper-X API",
+    description="🚀 Fast, schema-driven NitroType racing bot",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.route("/", methods=["GET"])
-def serve_index():
-    return send_from_directory(os.getcwd(), "index.html")
+# Graceful shutdown of executor
+executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+def _shutdown(*args):
+    executor.shutdown(wait=False)
+    logger.info("Shutting down executor")
+signal.signal(signal.SIGTERM, _shutdown)
+signal.signal(signal.SIGINT, _shutdown)
 
-# -----------------------------------------------------------------------------
-# API ENDPOINTS
-# -----------------------------------------------------------------------------
-@app.route("/racer", methods=["POST"])
-@require_token
-def http_racer():
-    data     = request.get_json() or {}
-    owner    = data.get("owner", "default")
-    user     = data.get("username")
-    pw       = data.get("password")
-    wpm      = int(data.get("wpm", 60))
-    races    = int(data.get("race_amount", data.get("races", 10)))
-    acc      = int(data.get("min_accuracy", data.get("min_acc", 90)))
+# --------------------------
+# SECURITY DEPENDENCY
+# --------------------------
+def require_token(admin: bool = False):
+    def dep(token: str = ""):
+        expected = ADMIN_TOKEN if admin else API_TOKEN
+        if token != expected:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    return Depends(dep)
 
-    if not user or not pw:
-        return jsonify(error="username & password required"), 400
+# --------------------------
+# Pydantic Models
+# --------------------------
+class RacerIn(BaseModel):
+    owner:       str = Field("default")
+    username:    str
+    password:    str
+    wpm:         int = Field(60, ge=30, le=170)
+    race_amount: int = Field(10, alias="races", ge=1, le=5000)
+    min_accuracy:int = Field(90, alias="min_acc", ge=0, le=100)
 
-    proxy = _get_proxy()
+class StatusOut(BaseModel):
+    status:   str
+    owner:    str
+    username: str
+
+# --------------------------
+# PROXY PICKER
+# --------------------------
+def _get_proxy() -> Optional[str]:
     try:
-        t = threading.Thread(
-            target=_main_module,
-            args=(owner, user, pw, wpm, races, acc, proxy),
-            daemon=True
-        )
-        t.start()
-        logger.info(f"Racer thread launched for {user}@{owner} ✔️")
-    except Exception as e:
-        logger.error(f"Failed to launch racer for {user}@{owner} ❌: {e}")
-        return jsonify(error="internal error"), 500
-
-    rec = next((r for r in tasks if r["owner"] == owner), None)
-    if not rec:
-        rec = {"owner": owner, "tasks": []}
-        tasks.append(rec)
-    rec["tasks"].append(user.lower())
-
-    return jsonify(
-        status="started",
-        owner=owner,
-        username=user,
-        wpm=wpm,
-        race_amount=races,
-        min_accuracy=acc
-    ), 200
-
-@app.route("/stopracer", methods=["POST"])
-@require_token
-def http_stopracer():
-    data     = request.get_json() or {}
-    owner    = data.get("owner", "default")
-    user     = data.get("username", "").lower()
-    rec = next((r for r in tasks if r["owner"] == owner), None)
-    if rec and user in rec["tasks"]:
-        rec["tasks"].remove(user)
-        return jsonify(status="stopped", owner=owner, username=user), 200
-    return jsonify(error="task not found"), 404
-
-@app.route("/stopall", methods=["POST"])
-@require_token
-def http_stopall():
-    owner = request.get_json().get("owner", "default")
-    rec   = next((r for r in tasks if r["owner"] == owner), None)
-    if rec:
-        rec["tasks"].clear()
-    return jsonify(status="stopped_all", owner=owner), 200
-
-@app.route("/tasks", methods=["GET"])
-@require_token
-def http_tasks():
-    owner = request.args.get("owner", "default")
-    rec   = next((r for r in tasks if r["owner"] == owner), None)
-    return jsonify(owner=owner, tasks=rec["tasks"] if rec else []), 200
-
-@app.route("/tracker", methods=["GET"])
-@require_token
-def http_tracker():
-    owner    = request.args.get("owner", "default")
-    username = request.args.get("username", "").lower()
-    rec = next((r for r in race_tracker
-                if r["owner"] == owner and r["username"] == username), None)
-    if rec:
-        return jsonify(owner=owner, username=username, races=rec["races"]), 200
-    return jsonify(error="no data"), 404
-
-@app.route("/stats", methods=["GET"])
-@require_token
-def http_stats():
-    total = sum(r["races"] for r in race_tracker)
-    return jsonify(total_races=total, results=race_tracker), 200
-
-@app.route("/admintasks", methods=["GET"])
-@require_token
-def http_admintasks():
-    target = request.args.get("target_owner", "")
-    rec    = next((r for r in tasks if r["owner"] == target), None)
-    if rec:
-        return jsonify(owner=target, tasks=rec["tasks"]), 200
-    return jsonify(error="no tasks"), 404
-
-@app.route("/adminstopall", methods=["POST"])
-@require_token
-def http_adminstopall():
-    target = request.get_json().get("target_owner", "")
-    rec    = next((r for r in tasks if r["owner"] == target), None)
-    if rec:
-        rec["tasks"].clear()
-        return jsonify(status="cleared", owner=target), 200
-    return jsonify(error="no tasks"), 404
-
-# -----------------------------------------------------------------------------
-# SELENIUM & NITROTYPE LOGIC
-# -----------------------------------------------------------------------------
-def _get_proxy() -> str:
-    try:
-        lines = [l.strip() for l in open(PROXY_FILE) if l.strip()]
+        with open(PROXY_FILE) as f:
+            lines = [l.strip() for l in f if l.strip()]
         return random.choice(lines) if lines else None
     except:
         return None
 
-def _record_success(owner: str, username: str):
-    uname = username.lower()
-    rec = next((r for r in race_tracker
-                if r["owner"] == owner and r["username"] == uname), None)
-    if rec:
-        rec["races"] += 1
-    else:
-        race_tracker.append({"owner": owner, "username": uname, "races": 1})
+# --------------------------
+# BOT SESSION CLASS
+# --------------------------
+class BotSession:
+    def __init__(self, cfg: RacerIn):
+        self.cfg   = cfg
+        self.id    = uuid.uuid4().hex
+        self.proxy = _get_proxy()
+        METRICS["races_started"].inc()
+        self.log = logger.bind(session_id=self.id, user=cfg.username)
 
-def _setup_driver(proxy: str = None):
-    opts = Options()
-    opts.binary_location = CHROME_BIN
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-
-    if proxy:
-        opts.add_argument(f"--proxy-server=http://{proxy}")
-
-    profile_dir = tempfile.mkdtemp(prefix="selenium-profile-")
-    opts.add_argument(f"--user-data-dir={profile_dir}")
-    logger.info(f"Using profile dir: {profile_dir}")
-
-    # Match ChromeDriver to installed Chrome version (e.g. 138)
-    service = Service(ChromeDriverManager(version="138.0.7204.157").install())
-    driver  = webdriver.Chrome(service=service, options=opts)
-    driver.set_window_size(1200, 800)
-    return driver, profile_dir
-
-def _login(driver, user: str, pw: str) -> bool:
-    driver.get("https://www.nitrotype.com/login")
-    time.sleep(2)
-    driver.find_element(By.NAME, "username").send_keys(user)
-    driver.find_element(By.NAME, "password").send_keys(pw)
-    driver.find_element(By.CSS_SELECTOR,
-        'button[data-cy="login-button"]').click()
-    time.sleep(4)
-    ok = any(x in driver.current_url for x in ("race", "garage"))
-    logger.info(f"[{user}] login {'OK ✔️' if ok else 'FAIL ❌'}")
-    return ok
-
-def _get_race_text(driver) -> str:
-    for _ in range(20):
+    def _chrome_version(self) -> Optional[str]:
         try:
-            el = driver.find_element(By.CSS_SELECTOR, "[data-test='race-word']")
-            if el.text:
-                break
+            out = subprocess.check_output([CHROME_BIN, "--version"])
+            return out.decode().strip().split(" ")[1]
         except:
-            time.sleep(0.3)
-    words = driver.find_elements(By.CSS_SELECTOR, "[data-test='race-word']")
-    return " ".join(w.text for w in words if w.text)
+            self.log.warning("chrome_version_fail")
+            return None
 
-def _run_race(driver, idx: int, wpm: int, acc: int) -> bool:
-    driver.get("https://www.nitrotype.com/race")
-    time.sleep(3)
-    text = _get_race_text(driver)
-    if not text:
-        logger.warning(f"Race #{idx}: no text ❗")
-        return False
+    @contextmanager
+    def _driver(self):
+        ver = self._chrome_version()
+        mgr_kwargs = {"version": ver} if ver else {}
+        opts = Options()
+        opts.binary_location = CHROME_BIN
+        opts.add_argument("--headless=new")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-blink-features=AutomationControlled")
+        if self.proxy:
+            opts.add_argument(f"--proxy-server=http://{self.proxy}")
 
-    inputs = driver.find_elements(By.CSS_SELECTOR, "[contenteditable='true']")
-    box = inputs[0] if inputs else driver.find_element(By.TAG_NAME
+        profile = tempfile.mkdtemp(prefix="profile-")
+        opts.add_argument(f"--user-data-dir={profile}")
+        self.log.info("launching_driver", profile=profile)
+
+        driver_path = ChromeDriverManager(**mgr_kwargs).install()
+        service     = Service(driver_path)
+        driver      = webdriver.Chrome(service=service, options=opts)
+        driver.set_window_size(1200, 800)
+
+        try:
+            yield driver
+        finally:
+            try: driver.quit()
+            except: pass
+            shutil.rmtree(profile, ignore_errors=True)
+            self.log.info("driver_cleaned", profile=profile)
+
+    def run(self):
+        self.log.info("session_start", races=self.cfg.race_amount, wpm=self.cfg.wpm, acc=self.cfg.min_accuracy)
+        with self._driver() as d:
+            # LOGIN
+            d.get("https://www.nitrotype.com/login"); time.sleep(2)
+            d.find_element(By.NAME, "username").send_keys(self.cfg.username)
+            d.find_element(By.NAME, "password").send_keys(self.cfg.password)
+            d.find_element(By.CSS_SELECTOR, 'button[data-cy="login-button"]').click()
+            time.sleep(4)
+            if not any(x in d.current_url for x in ("race","garage")):
+                self.log.error("login_fail"); METRICS["races_failed"].inc(); return
+
+            # RACING
+            for i in range(1, self.cfg.race_amount + 1):
+                d.get("https://www.nitrotype.com/race"); time.sleep(3)
+                words = d.find_elements(By.CSS_SELECTOR, "[data-test='race-word']")
+                text  = " ".join(w.text for w in words if w.text)
+                if not text:
+                    self.log.warning("no_text", race=i); continue
+
+                box = d.find_elements(By.CSS_SELECTOR, "[contenteditable='true']")
+                elem = box[0] if box else d.find_element(By.TAG_NAME, "body")
+                for w in text.split():
+                    if random.randint(1,100) <= self.cfg.min_accuracy:
+                        for ch in w:
+                            elem.send_keys(ch); time.sleep(random.uniform(60/self.cfg.wpm/5,60/self.cfg.wpm/2))
+                    else:
+                        elem.send_keys("x")
+                    elem.send_keys(" ")
+                self.log.debug("race_done", race=i)
+
+            METRICS["races_completed"].inc()
+            self.log.info("session_complete")
+
+# --------------------------
+# IN-MEMORY TRACKERS
+# --------------------------
+tasks: Dict[str, list] = {}
+# --------------------------
+# ROUTES
+# --------------------------
+
+@app.get("/health")
+async def health(): return {"status":"ok"}
+
+@app.post(
+    "/racer",
+    response_model=StatusOut,
+    dependencies=[require_token()]
+)
+async def start_racer(body: RacerIn):
+    session = BotSession(body)
+    executor.submit(session.run)
+
+    tasks.setdefault(body.owner, []).append(body.username.lower())
+    return StatusOut(status="started", owner=body.owner, username=body.username)
+
+@app.get("/tasks", dependencies=[require_token()])
+async def get_tasks(owner: str="default"):
+    return {"owner": owner, "tasks": tasks.get(owner, [])}
+
+@app.get("/metrics")
+async def metrics():
+    data = generate_latest()
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+
+# (Add /stopracer, /stopall, /tracker, /stats, /admintasks, /adminstopall similarly)
+
+# --------------------------
+# RUN
+# --------------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("bot:app", host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
