@@ -1,20 +1,30 @@
-# Use the official slim Python image (allows apt-get)
-FROM python:3.13-slim
+# Use official Python base image
+FROM python:3.10-slim
 
-# Install Chromium & Chromedriver
-RUN apt-get update && \
-    apt-get install -y chromium chromium-driver && \
-    rm -rf /var/lib/apt/lists/*
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-driver \
+    fonts-liberation \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set environment variables for Selenium
+ENV CHROME_BIN=/usr/bin/chromium
+ENV DRIVER_BIN=/usr/bin/chromedriver
 
 # Set working directory
 WORKDIR /app
 
-# Install Python deps
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy your code
+# Copy project files
 COPY . .
 
-# Default command
-CMD ["python", "bot.py"]
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Expose port
+EXPOSE 10000
+
+# Start the app
+CMD ["python", "app.py"]
