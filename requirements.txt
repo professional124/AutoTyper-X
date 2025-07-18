@@ -1,4 +1,8 @@
-Flask
-python-dotenv
+fastapi
+uvicorn[standard]
+structlog
+pydantic
+prometheus-client
 selenium
 webdriver-manager
+python-dotenv
