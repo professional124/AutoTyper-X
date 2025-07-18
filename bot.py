@@ -11,17 +11,15 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 
-# Selenium imports
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
-# webdriver-manager for automatic driver management
 from webdriver_manager.chrome import ChromeDriverManager
 
 # -----------------------------------------------------------------------------
-#  ENVIRONMENT & CONFIG
+# ENVIRONMENT & CONFIG
 # -----------------------------------------------------------------------------
 load_dotenv()
 API_TOKEN   = os.getenv("API_TOKEN")
@@ -30,20 +28,18 @@ PROXY_FILE  = "proxies.txt"
 CHROME_BIN  = os.getenv("CHROME_BIN", "/usr/bin/chromium")
 
 # -----------------------------------------------------------------------------
-#  STATE TRACKERS (IN-MEMORY)
+# STATE TRACKERS
 # -----------------------------------------------------------------------------
-tasks        = []  # [ {owner, tasks:[username,...]}, ... ]
-race_tracker = []  # [ {owner, username, races}, ... ]
+tasks        = []
+race_tracker = []
 
 # -----------------------------------------------------------------------------
-#  LOGGING SETUP (file + stdout)
+# LOGGING
 # -----------------------------------------------------------------------------
 os.makedirs("logs", exist_ok=True)
 logfile = f"logs/{datetime.now():%Y-%m-%d_%H-%M-%S}.log"
-
 for h in logging.root.handlers[:]:
     logging.root.removeHandler(h)
-
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
@@ -55,7 +51,7 @@ logging.basicConfig(
 logger = logging.getLogger()
 
 # -----------------------------------------------------------------------------
-#  FLASK APP SETUP
+# FLASK APP
 # -----------------------------------------------------------------------------
 app = Flask(__name__, static_folder=".", static_url_path="")
 
@@ -73,7 +69,7 @@ def serve_index():
     return send_from_directory(os.getcwd(), "index.html")
 
 # -----------------------------------------------------------------------------
-#  API ENDPOINTS
+# API ENDPOINTS
 # -----------------------------------------------------------------------------
 @app.route("/racer", methods=["POST"])
 @require_token
@@ -182,7 +178,7 @@ def http_adminstopall():
     return jsonify(error="no tasks"), 404
 
 # -----------------------------------------------------------------------------
-#  SELENIUM & NITROTYPE LOGIC
+# SELENIUM & NITROTYPE LOGIC
 # -----------------------------------------------------------------------------
 def _get_proxy() -> str:
     try:
@@ -201,11 +197,6 @@ def _record_success(owner: str, username: str):
         race_tracker.append({"owner": owner, "username": uname, "races": 1})
 
 def _setup_driver(proxy: str = None):
-    """
-    Each session gets:
-      - A fresh ChromeDriver via webdriver-manager
-      - A unique --user-data-dir for profile isolation
-    """
     opts = Options()
     opts.binary_location = CHROME_BIN
     opts.add_argument("--headless=new")
@@ -221,7 +212,8 @@ def _setup_driver(proxy: str = None):
     opts.add_argument(f"--user-data-dir={profile_dir}")
     logger.info(f"Using profile dir: {profile_dir}")
 
-    service = Service(ChromeDriverManager().install())
+    # Match ChromeDriver to installed Chrome version (e.g. 138)
+    service = Service(ChromeDriverManager(version="138.0.7204.157").install())
     driver  = webdriver.Chrome(service=service, options=opts)
     driver.set_window_size(1200, 800)
     return driver, profile_dir
@@ -258,54 +250,4 @@ def _run_race(driver, idx: int, wpm: int, acc: int) -> bool:
         return False
 
     inputs = driver.find_elements(By.CSS_SELECTOR, "[contenteditable='true']")
-    box = inputs[0] if inputs else driver.find_element(By.TAG_NAME, "body")
-
-    for w in text.split():
-        if random.randint(1,100) <= acc:
-            for ch in w:
-                box.send_keys(ch)
-                time.sleep(random.uniform(60/wpm/5, 60/wpm/2))
-        else:
-            box.send_keys("x")
-        box.send_keys(" ")
-    logger.debug(f"Race #{idx} done")
-    return True
-
-def _main_module(owner, user, pw, wpm, races, acc, proxy):
-    driver = profile_dir = None
-    success = 0
-    logger.info(f"[{user}] session start: {races} races @ {wpm}wpm, {acc}% acc, proxy={proxy}")
-
-    try:
-        driver, profile_dir = _setup_driver(proxy)
-        if not _login(driver, user, pw):
-            return
-
-        for i in range(1, races + 1):
-            if _run_race(driver, i, wpm, acc):
-                _record_success(owner, user)
-                success += 1
-            time.sleep(random.randint(3, 8))
-
-        if success == races:
-            logger.info(f"[{user}] completed all {races} races ✔️")
-        else:
-            logger.warning(f"[{user}] completed {success}/{races} races ❗")
-
-    except Exception as e:
-        logger.error(f"[{user}] session error ❌: {e}")
-    finally:
-        if driver:
-            driver.quit()
-        if profile_dir:
-            shutil.rmtree(profile_dir, ignore_errors=True)
-
-# -----------------------------------------------------------------------------
-#  RUN FLASK APP
-# -----------------------------------------------------------------------------
-if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", 10000)),
-        debug=False
-    )
+    box = inputs[0] if inputs else driver.find_element(By.TAG_NAME
