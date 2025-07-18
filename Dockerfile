@@ -1,7 +1,7 @@
-# Use official Python base image
+# Use a lightweight Python base image
 FROM python:3.10-slim
 
-# Install system dependencies
+# Install system dependencies for Chromium and ChromeDriver
 RUN apt-get update && apt-get install -y \
     chromium \
     chromium-driver \
@@ -17,14 +17,14 @@ ENV DRIVER_BIN=/usr/bin/chromedriver
 # Set working directory
 WORKDIR /app
 
-# Copy project files
+# Copy all project files
 COPY . .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose port
+# Expose the port your Flask app runs on
 EXPOSE 10000
 
-# Start the app
-CMD ["python", "app.py"]
+# Start the bot server
+CMD ["python", "bot.py"]
